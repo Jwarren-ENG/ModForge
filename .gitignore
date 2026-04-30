@@ -1,0 +1,10 @@
+node_modules/
+dist/
+generated-projects/
+.env
+.env.local
+*.log
+.DS_Store
+.idea/
+.vscode/
+.claude/
