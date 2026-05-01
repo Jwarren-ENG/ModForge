@@ -215,7 +215,9 @@ Generated through the deterministic templates (`retexture_block` feature). Succe
 
 ## Local web UI
 
-A minimal local web interface is available alongside the CLI. **The CLI remains the source of truth** — the web UI is a thin Express front-end that calls the same `runGeneration` core service the CLI uses, with no parallel logic or shortcuts. Schemas, safe writer, templates, and the repair loop are all unchanged.
+A local web interface is available alongside the CLI. **The CLI remains the source of truth** — the web UI is a thin Express front-end that calls the same `runGeneration` core service the CLI uses, with no parallel logic or shortcuts. Schemas, safe writer, templates, and the repair loop are all unchanged.
+
+The UI is a chat-style interface (Milestone 3.6 redesign): an empty hero with a prompt composer and example chips, a chat thread that maps real engine events to six friendly progress steps (Checking your Minecraft setup → Understanding your mod idea → Creating a clean mod project → Writing code and textures → Building the mod → Polishing the mod), and a result panel with a big **Download jar** button. Raw Gradle output is hidden in a collapsed "Show technical log" disclosure; project paths, file lists, repair history, and uncovered-features info are tucked into a collapsed "Advanced details" pane. No external CDN/font dependencies — fully local under the strict CSP.
 
 ### Run it
 
@@ -428,13 +430,63 @@ The same `(style, primaryColor, secondaryColor, faceMode, glowing)` tuple always
 
 ### Vanilla retextures
 
-Two new feature types — `retexture_item` and `retexture_block` — produce **resource-pack-style overrides** that replace vanilla textures by writing into `assets/minecraft/textures/...`. To prevent arbitrary-path writes from prompts, vanillaTargets are **allowlisted** in `src/textures/vanillaTargets.ts`:
+Two new feature types — `retexture_item` and `retexture_block` — produce **resource-pack-style overrides** that replace vanilla textures by writing into `assets/minecraft/textures/...`. To prevent arbitrary-path writes from prompts, vanillaTargets are **allowlisted** in `src/textures/vanillaTargets.ts` (Milestone 3.7 broad coverage):
 
-- ~25 vanilla items (gems, ingots, foods, sticks, basic tools' materials)
-- ~20 vanilla blocks (stones, ores, planks, dirt, grass, sand, end stone, obsidian, …)
-- For multi-face blocks like `minecraft:grass_block`, only allowed face names (`top`, `side`) can be requested
+- **~95 vanilla items** — every weapon and tool material variant (`<material>_sword|pickaxe|axe|shovel|hoe`), full armor sets (`<material>_helmet|chestplate|leggings|boots`), common items (bow / crossbow / trident / fishing_rod / bucket / flint_and_steel / shears / book / writable_book / enchanted_book / map / name_tag / saddle), food and nature items, gems, ingots, etc.
+- **~50 vanilla blocks** — natural blocks, all 8 standard ores + 8 deepslate variants, storage blocks for every metal/gem, all 8 wood logs (top + side faces) and planks
+- **Tool silhouettes** — sword / pickaxe / axe / shovel / hoe each get a thin diagonal silhouette so a "make wooden sword red" retexture reads as a sword, not a square
+- For multi-face blocks like `minecraft:grass_block`, only the allowed face names (`top`, `side`) can be requested
 
 If the planner emits a `vanillaTarget` outside the allowlist, the spec is rejected at the schema layer **before** any generator runs — no path is ever constructed from raw user input. The generator looks up the allowed path by key and never concatenates user strings into a filesystem path.
+
+**Procedural retint** (Milestone 3.7-patch): item retextures use a luminance-preserving 4-tone retint — outline (darkest), highlight ring (just inside the upper/left silhouette edge), shadow ring (just inside the lower/right edge, honoring `secondaryColor` if provided), and interior (primary). Same shape, four cleanly banded shades, alpha pattern is byte-identical regardless of color. So "make wooden sword red" and "make wooden sword blue" produce the same silhouette with different palettes, not different shapes.
+
+> **Why we don't read Mojang's PNGs:** ideally a vanilla retexture would read the actual `textures/item/wooden_sword.png` from your Minecraft install and recolor it byte-for-byte. We can't redistribute Mojang's assets, and Node's stdlib has no PNG decoder, so we use procedurally-shaped silhouettes (sword/pickaxe/axe/shovel/hoe/diamond/crystal-shard/ingot/generic-item) that approximate the vanilla shapes. A future milestone may add a `MODFORGE_VANILLA_ASSETS_DIR` opt-in for users who want to point us at their own extracted assets.
+
+**Known limitations** (intentional):
+
+- **Animated / multi-state items**: bow, crossbow, and fishing_rod each have multiple visual states (drawing animations, loaded/standby variants). The retexture writes only the **base/standby** texture — other animation frames keep the vanilla art. The README and the in-code allowlist comment call this out so users know to expect a partial visual change.
+- **NOT allowlisted (no in-game effect from a flat PNG retexture)**: `minecraft:shield` (entity-backed model, no `textures/item/shield.png`), `minecraft:compass` (animated frames `compass_00..compass_31`), `minecraft:clock` (animated frames `clock_00..clock_63`). Asking for these will fail validation with the standard "not in the retexture allowlist" message — better than silently accepting a retexture that wouldn't show up in-game. Re-add when we model per-frame / entity-texture paths.
+
+### Optional: use real vanilla textures for better retextures
+
+By default, vanilla retextures use **procedurally-shaped** silhouettes — a sword retexture looks like a generic sword, a diamond retexture looks like a generic diamond, etc. If you'd rather have ModForge recolor the **actual** vanilla Minecraft 1.20.1 textures (preserving Mojang's exact pixel art and detail), you can opt in by extracting them from your own local Minecraft install.
+
+> Mojang's textures are not redistributed. The extracted folder is gitignored. The extraction script reads from your own local launcher install only.
+
+**1. Make sure you've launched Minecraft 1.20.1 at least once** (so the launcher has cached the asset index for that version on disk).
+
+**2. Run the helper:**
+
+```sh
+npm run vanilla:extract
+```
+
+This reads:
+
+- macOS: `~/Library/Application Support/minecraft/assets/indexes/1.20.1.json`
+- Windows: `%APPDATA%\.minecraft\assets\indexes\1.20.1.json`
+- Linux: `~/.minecraft/assets/indexes/1.20.1.json`
+
+…iterates ModForge's vanilla retexture allowlist (~145 paths), and copies the matching content-addressed object files into:
+
+```
+./vanilla-assets-1.20.1/assets/minecraft/textures/{item,block}/...
+```
+
+Anything missing is skipped with a warning — ModForge falls back to the procedural texture for those.
+
+**3. Point ModForge at the extracted directory:**
+
+```sh
+export MODFORGE_VANILLA_ASSETS_DIR="$(pwd)/vanilla-assets-1.20.1"
+```
+
+(Add to `.env` if you want it persistent.)
+
+**4. Re-run** `npm run web` (or the CLI). Now "make wooden sword red" produces a recolored *real* wooden sword rather than the procedural silhouette. The retint preserves alpha exactly, so the silhouette is unchanged — only the four-tone palette shifts.
+
+If the env var is unset or the file is missing, the procedural fallback runs and the generated `README.md` notes which textures used the fallback.
 
 ### Repair loop
 

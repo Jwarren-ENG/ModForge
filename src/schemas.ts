@@ -568,6 +568,84 @@ export const RepairResponseSchema = z.object({
   files: z.array(GeneratedFileSchema),
 });
 
+// ---------- clarification (Milestone 3.8) ----------
+
+const ClarificationChoiceQuestion = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_]*$/, "id must be snake_case"),
+    type: z.literal("choice"),
+    question: z.string().min(3).max(200),
+    choices: z.array(z.string().min(1).max(80)).min(1).max(8),
+    allowOther: z.boolean().default(true),
+  })
+  .strict();
+
+const ClarificationFreeTextQuestion = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_]*$/, "id must be snake_case"),
+    type: z.literal("free_text"),
+    question: z.string().min(3).max(200),
+    placeholder: z.string().max(120).optional(),
+  })
+  .strict();
+
+export const ClarificationQuestionSchema = z.discriminatedUnion("type", [
+  ClarificationChoiceQuestion,
+  ClarificationFreeTextQuestion,
+]);
+
+export const ClarificationResponseSchema = z
+  .object({
+    skip: z.boolean().default(false),
+    questions: z.array(ClarificationQuestionSchema).max(3).default([]),
+    summary: z.string().max(400).default(""),
+  })
+  .strict()
+  .superRefine((r, ctx) => {
+    if (r.skip && r.questions.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "skip=true is incompatible with questions; either skip or ask",
+        path: ["questions"],
+      });
+    }
+    if (!r.skip && r.questions.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "must include at least 1 question or set skip=true",
+        path: ["questions"],
+      });
+    }
+    const seenIds = new Set<string>();
+    r.questions.forEach((q, i) => {
+      if (seenIds.has(q.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate question id "${q.id}"`,
+          path: ["questions", i, "id"],
+        });
+      }
+      seenIds.add(q.id);
+      // Choice questions with allowOther !== false must include "Other".
+      if (q.type === "choice" && q.allowOther !== false) {
+        const hasOther = q.choices.some(
+          (c) => c.trim().toLowerCase() === "other",
+        );
+        if (!hasOther) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              'choice question must include "Other" (set allowOther: false to opt out)',
+            path: ["questions", i, "choices"],
+          });
+        }
+      }
+    });
+  });
+
+export type ClarificationQuestion = z.infer<typeof ClarificationQuestionSchema>;
+export type ClarificationResponse = z.infer<typeof ClarificationResponseSchema>;
+
 // ---------- types ----------
 
 export type ModSpec = z.infer<typeof ModSpecSchema>;

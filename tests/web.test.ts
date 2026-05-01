@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { Buffer } from "node:buffer";
-import { createApp, type OpenInFinderFn, type RunGenerationFn } from "../src/web/app.js";
+import { createApp, type ClarifyFn, type OpenInFinderFn, type RunGenerationFn } from "../src/web/app.js";
 import { _resetJobs } from "../src/web/jobs.js";
 import type { GenerationEvent } from "../src/core/runGeneration.js";
 
@@ -25,12 +25,14 @@ async function startServer(opts: {
   runGen?: RunGenerationFn;
   maxActiveJobs?: number;
   openInFinder?: OpenInFinderFn;
+  clarify?: ClarifyFn;
 } = {}): Promise<{ port: number; close: () => Promise<void> }> {
   _resetJobs();
   const app = createApp({
     runGeneration: opts.runGen,
     maxActiveJobs: opts.maxActiveJobs,
     openInFinder: opts.openInFinder,
+    clarify: opts.clarify,
     clientDir: null, // skip static serving for tests
   });
   return new Promise((resolve, reject) => {
@@ -629,6 +631,346 @@ test("end-to-end: jobId from /api/generate is the EXACT id accepted by /download
     await s.close();
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+// =====================================================================
+// /api/clarify (Milestone 3.8)
+// =====================================================================
+
+test("/api/clarify returns the stub's response shape", async () => {
+  const stub: ClarifyFn = async (idea: string) => ({
+    skip: false,
+    questions: [
+      {
+        id: "intent",
+        type: "choice",
+        question: `Recolor existing item or create new? (idea: ${idea})`,
+        choices: ["Edit vanilla Wooden Sword", "Create new custom red wooden sword", "Other"],
+        allowOther: true,
+      },
+    ],
+    summary: "Got it. I'll {intent}.",
+  });
+  const s = await startServer({ clarify: stub });
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: "Make wooden sword red" }),
+    });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.skip, false);
+    assert.equal(j.questions.length, 1);
+    assert.equal(j.questions[0].id, "intent");
+    assert.equal(j.questions[0].type, "choice");
+    assert.ok(j.questions[0].choices.includes("Other"));
+  } finally {
+    await s.close();
+  }
+});
+
+test("/api/clarify returns skip:true when the stub decides no clarification is needed", async () => {
+  const stub: ClarifyFn = async () => ({ skip: true, questions: [], summary: "" });
+  const s = await startServer({ clarify: stub });
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: "Add a sapphire block with a crafting recipe" }),
+    });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.skip, true);
+    assert.deepEqual(j.questions, []);
+  } finally {
+    await s.close();
+  }
+});
+
+test("/api/clarify rejects empty idea (400 JSON)", async () => {
+  const s = await startServer();
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(r.status, 400);
+    const j = await r.json();
+    assert.match(j.error, /idea is required/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("/api/clarify rejects oversized body (413 JSON)", async () => {
+  const s = await startServer();
+  try {
+    const big = "x".repeat(64 * 1024);
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: big }),
+    });
+    assert.equal(r.status, 413);
+  } finally {
+    await s.close();
+  }
+});
+
+test("/api/clarify surfaces stub errors as 500 JSON", async () => {
+  const stub: ClarifyFn = async () => { throw new Error("clarification model error"); };
+  const s = await startServer({ clarify: stub });
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: "anything" }),
+    });
+    assert.equal(r.status, 500);
+    const j = await r.json();
+    assert.match(j.error, /clarification model error/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("/api/health advertises 'clarify' in capabilities", async () => {
+  const s = await startServer();
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/health`);
+    const j = (await r.json()) as { capabilities: string[] };
+    assert.ok(j.capabilities.includes("clarify"), "'clarify' must be advertised");
+  } finally {
+    await s.close();
+  }
+});
+
+// =====================================================================
+// Milestone 3.8 patch — submit-bug regression guards
+// =====================================================================
+
+test("/api/clarify deterministically intercepts ambiguous 'make a red wooden sword' (no LLM needed)", async () => {
+  // No clarify stub passed — the default uses the real generateClarification,
+  // which calls detectAmbiguousVanillaRetexture FIRST. The detector intercepts
+  // before any LLM call, so this test runs without an Anthropic API key.
+  const s = await startServer();
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea: "make a red wooden sword" }),
+    });
+    assert.equal(r.status, 200);
+    const j = (await r.json()) as { skip: boolean; questions: any[]; summary?: string };
+    assert.equal(j.skip, false);
+    assert.equal(j.questions.length, 1);
+    const q = j.questions[0]!;
+    assert.equal(q.id, "intent");
+    assert.equal(q.type, "choice");
+    assert.ok(q.choices.includes("Edit vanilla Wooden Sword"));
+    assert.ok(q.choices.some((c: string) => c.toLowerCase().startsWith("create new custom")));
+    assert.ok(q.choices.includes("Other"));
+  } finally {
+    await s.close();
+  }
+});
+
+test("/favicon.ico returns a valid PNG (browser console stays quiet)", async () => {
+  const s = await startServer();
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/favicon.ico`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("content-type"), "image/png");
+    const buf = Buffer.from(await r.arrayBuffer());
+    // PNG signature.
+    assert.equal(buf[0], 0x89);
+    assert.equal(buf[1], 0x50);
+    assert.equal(buf[2], 0x4e);
+    assert.equal(buf[3], 0x47);
+  } finally {
+    await s.close();
+  }
+});
+
+test("client app.js declares serverCapabilities (regression: TDZ ReferenceError)", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // Every reference must be backed by a declaration. The bug was that the
+  // declaration got dropped during the 3.8 client rewrite, leaving the helper
+  // referencing an undefined identifier.
+  assert.ok(
+    /\b(?:let|var|const)\s+serverCapabilities\b/.test(app),
+    "serverCapabilities must be declared at module scope",
+  );
+  assert.ok(
+    /\bserverCapabilities\.has\(/.test(app),
+    "serverCapabilities must be used (sanity check this regression test is meaningful)",
+  );
+});
+
+test("client app.js has a safeSubmit wrapper around submit (regression: silent failures)", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // Must have a safeSubmit wrapper that catches and renders errors visibly.
+  assert.ok(
+    /\bfunction\s+safeSubmit\b|\bsafeSubmit\s*=\s*async/.test(app),
+    "safeSubmit wrapper must exist",
+  );
+  // The Forge button must use safeSubmit, not bare submit (which can throw silently).
+  assert.ok(
+    /onClick\s*:\s*safeSubmit\b/.test(app),
+    "Forge button must use safeSubmit as its click handler",
+  );
+});
+
+test("client submit() awaits loadCapabilities() before deciding clarify vs direct generate", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // Must define loadCapabilities + capabilitiesReady promise.
+  assert.match(app, /function\s+loadCapabilities\b/, "loadCapabilities() must exist");
+  assert.match(app, /capabilitiesReady\b/, "capabilitiesReady promise must exist");
+  // submit() must await loadCapabilities().
+  const submitMatch = app.match(/async function submit\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(submitMatch, "submit() must exist");
+  const submitBody = submitMatch![0];
+  assert.match(submitBody, /await\s+loadCapabilities\(\)/, "submit() must await loadCapabilities()");
+});
+
+test("client submit() ASSIGNS to module-level serverCapabilities (regression: stale empty Set)", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // Must contain a top-level (non-`const`/`let`/`var`) assignment to serverCapabilities.
+  // i.e. serverCapabilities = new Set(...) inside a function body, not a fresh local.
+  assert.match(
+    app,
+    /^\s*serverCapabilities\s*=\s*new\s+Set\(/m,
+    "serverCapabilities must be (re)assigned at module scope, not just shadowed",
+  );
+});
+
+test("client submit() calls /api/clarify before /api/generate when clarify capability exists", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  const submitMatch = app.match(/async function submit\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(submitMatch, "submit() must exist");
+  const body = submitMatch![0];
+  // Inside submit(), the /api/clarify fetch must appear BEFORE any
+  // startGenerationDirectly call.
+  const clarifyIdx = body.indexOf("/api/clarify");
+  const directIdx = body.indexOf("startGenerationDirectly");
+  assert.ok(clarifyIdx > -1, "submit() must reference /api/clarify");
+  assert.ok(directIdx > -1, "submit() must reference startGenerationDirectly");
+  assert.ok(
+    clarifyIdx < directIdx,
+    "/api/clarify must appear before startGenerationDirectly inside submit()",
+  );
+});
+
+test("client submit() does NOT silently fall back to direct generate when /api/clarify fails", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  const submitMatch = app.match(/async function submit\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(submitMatch);
+  const body = submitMatch![0];
+  // The HAS_CLARIFY branch must show a clarification.error (visible) instead
+  // of calling startGenerationDirectly on failure. We assert that the body
+  // sets state.clarification.error in at least one error path.
+  assert.match(
+    body,
+    /clarification\.error\s*=/,
+    "clarify failure must surface state.clarification.error (no silent fallback)",
+  );
+});
+
+test("client Enter key submits (Shift+Enter inserts newline) and routes through safeSubmit", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // Plain Enter (without Shift) must submit, must call preventDefault to
+  // suppress the newline, must guard IME composition, and must route through
+  // safeSubmit so a thrown error renders the error card.
+  assert.match(
+    app,
+    /e\.key === "Enter"\s*&&\s*!e\.shiftKey\s*&&\s*!e\.isComposing/,
+    "Enter handler must check !shiftKey and !isComposing",
+  );
+  const handlerBody = app.match(
+    /e\.key === "Enter"\s*&&\s*!e\.shiftKey\s*&&\s*!e\.isComposing\)\s*\{([^}]+)\}/,
+  );
+  assert.ok(handlerBody, "Enter handler block not found");
+  assert.match(
+    handlerBody![1]!,
+    /e\.preventDefault\(\)/,
+    "Enter handler must call preventDefault to stop the newline",
+  );
+  assert.match(
+    handlerBody![1]!,
+    /safeSubmit\(\)/,
+    "Enter handler must call safeSubmit, not bare submit",
+  );
+});
+
+test("client submit() short-circuits to /api/generate when /api/clarify returns skip:true", async () => {
+  // Static check: inside submit(), the skip-path must call startGenerationDirectly.
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  const submitMatch = app.match(/async function submit\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(submitMatch, "submit() must exist");
+  const body = submitMatch![0];
+  // The skip:true branch must call startGenerationDirectly(prompt) — i.e. proceed
+  // to /api/generate without rendering questions.
+  assert.match(
+    body,
+    /cr\.skip\s*===?\s*true[\s\S]{0,200}startGenerationDirectly\(prompt\)/,
+    "skip:true must short-circuit to startGenerationDirectly",
+  );
+});
+
+test("client app.js HAS_CLARIFY is defensive (no throw on unloaded capabilities)", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const app = await fs.readFile(
+    path.resolve(import.meta.dirname ?? ".", "../src/web/client/app.js"),
+    "utf8",
+  );
+  // HAS_CLARIFY should defend against undefined / non-Set capability state.
+  assert.ok(
+    /HAS_CLARIFY[\s\S]{0,400}\b(?:try\b|instanceof Set)/.test(app),
+    "HAS_CLARIFY must be defensive (try/catch or instanceof Set check)",
+  );
 });
 
 test("response headers include nosniff + CSP", async () => {

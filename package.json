@@ -19,7 +19,10 @@
     "dev:web": "tsx watch src/web/server.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "build": "tsc",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "textures:debug": "tsx scripts/debugTextures.ts",
+    "retint:debug": "tsx scripts/debugRetint.ts",
+    "vanilla:extract": "tsx scripts/extractVanillaAssets.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

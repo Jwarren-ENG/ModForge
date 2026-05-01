@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ModSpecSchema } from "../src/schemas.js";
+import { ClarificationResponseSchema, ModSpecSchema } from "../src/schemas.js";
 
 const baseSpec = {
   modId: "test_mod",
@@ -336,6 +336,148 @@ test("ModSpecSchema: tool-class collision with mainClass fails", () => {
     },
     /generated class name "CopperHammerItem" collides/,
   );
+});
+
+// =====================================================================
+// ClarificationResponseSchema (Milestone 3.8)
+// =====================================================================
+
+test("ClarificationResponseSchema: valid choice question passes", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      {
+        id: "intent",
+        type: "choice",
+        question: "Edit existing wooden sword or add a new one?",
+        choices: ["Edit vanilla Wooden Sword", "Create new custom red wooden sword", "Other"],
+        allowOther: true,
+      },
+    ],
+    summary: "Got it. I'll {intent}.",
+  });
+  assert.equal(r.success, true);
+});
+
+test("ClarificationResponseSchema: valid free_text question passes (no choices)", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      {
+        id: "focus",
+        type: "free_text",
+        question: "What specifically should this mod do?",
+        placeholder: "e.g. add a glowing crystal item",
+      },
+    ],
+  });
+  assert.equal(r.success, true);
+});
+
+test("ClarificationResponseSchema: skip=true with empty questions is valid", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: true,
+    questions: [],
+  });
+  assert.equal(r.success, true);
+});
+
+test("ClarificationResponseSchema: skip=true with questions fails", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: true,
+    questions: [{
+      id: "x", type: "choice", question: "?", choices: ["A", "Other"], allowOther: true,
+    }],
+  });
+  assert.equal(r.success, false);
+});
+
+test("ClarificationResponseSchema: not skip + empty questions fails", () => {
+  const r = ClarificationResponseSchema.safeParse({ skip: false, questions: [] });
+  assert.equal(r.success, false);
+});
+
+test("ClarificationResponseSchema: choice question without 'Other' fails when allowOther defaults true", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      {
+        id: "x",
+        type: "choice",
+        question: "Pick one",
+        choices: ["A", "B"],
+        // allowOther omitted -> defaults to true -> must include Other
+      },
+    ],
+  });
+  assert.equal(r.success, false);
+  if (!r.success) {
+    const msg = r.error.issues.map((i) => i.message).join("\n");
+    assert.match(msg, /must include "Other"/);
+  }
+});
+
+test("ClarificationResponseSchema: choice question without 'Other' is OK when allowOther: false", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      {
+        id: "x",
+        type: "choice",
+        question: "Pick one",
+        choices: ["A", "B"],
+        allowOther: false,
+      },
+    ],
+  });
+  assert.equal(r.success, true);
+});
+
+test("ClarificationResponseSchema: more than 3 questions fails", () => {
+  const q = (id: string) => ({
+    id, type: "choice" as const, question: "Q?", choices: ["A", "Other"], allowOther: true,
+  });
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [q("a"), q("b"), q("c"), q("d")],
+  });
+  assert.equal(r.success, false);
+});
+
+test("ClarificationResponseSchema: duplicate question ids fail", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      { id: "x", type: "choice", question: "Q1", choices: ["A", "Other"], allowOther: true },
+      { id: "x", type: "choice", question: "Q2", choices: ["B", "Other"], allowOther: true },
+    ],
+  });
+  assert.equal(r.success, false);
+  if (!r.success) {
+    const msg = r.error.issues.map((i) => i.message).join("\n");
+    assert.match(msg, /duplicate question id "x"/);
+  }
+});
+
+test("ClarificationResponseSchema: id must be snake_case", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      { id: "BadId", type: "choice", question: "Q1", choices: ["A", "Other"], allowOther: true },
+    ],
+  });
+  assert.equal(r.success, false);
+});
+
+test("ClarificationResponseSchema: unknown top-level field fails (.strict())", () => {
+  const r = ClarificationResponseSchema.safeParse({
+    skip: false,
+    questions: [
+      { id: "x", type: "choice", question: "Q?", choices: ["A", "Other"], allowOther: true },
+    ],
+    extraField: 42,
+  });
+  assert.equal(r.success, false);
 });
 
 test("ModSpecSchema: valid sapphire spec passes", () => {

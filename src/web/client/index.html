@@ -3,46 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ModForge AI · Local UI</title>
+  <title>ModForge — describe a Minecraft mod, get a working jar</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header>
-    <h1>ModForge AI</h1>
-    <p class="sub">Local web UI · the CLI is the source of truth</p>
-  </header>
-
-  <main>
-    <section id="prompt" class="card">
-      <label for="idea"><strong>Mod idea</strong></label>
-      <textarea id="idea" rows="3" placeholder="A void crystal item that is dark purple and glowing..."></textarea>
-      <div class="examples-label">Try one of these (click to fill):</div>
-      <div id="examples" class="examples-grid"></div>
-      <div class="actions">
-        <button id="generate" type="button" class="primary">Generate</button>
-        <span id="apiNote" class="note"></span>
-      </div>
-    </section>
-
-    <section id="status" class="card" hidden>
-      <h2>Progress</h2>
-      <ol id="timeline" class="timeline"></ol>
-      <details class="buildlog">
-        <summary>Gradle build log</summary>
-        <pre id="buildLog"></pre>
-      </details>
-    </section>
-
-    <section id="output" hidden>
-      <!-- Cards are rendered into this container on done/error. -->
-      <div id="cards"></div>
-    </section>
-  </main>
-
-  <footer>
-    <p>Local only · http://127.0.0.1 · No accounts, no telemetry, no deployment.</p>
-  </footer>
-
+  <div id="root"></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -24,6 +24,9 @@ export interface FeatureContribution {
   langEntries: Record<string, string>;
   /** Block tag contributions: tagPath -> array of "<modid>:<id>" values, merged across features. */
   blockTags: Record<string, string[]>;
+  /** Free-form notes the orchestrator surfaces in the generated README's
+   *  Limitations section (e.g. "fell back to procedural texture for X"). */
+  noticeMessages: string[];
 }
 
 export function emptyContribution(): FeatureContribution {
@@ -37,5 +40,6 @@ export function emptyContribution(): FeatureContribution {
     resources: [],
     langEntries: {},
     blockTags: {},
+    noticeMessages: [],
   };
 }

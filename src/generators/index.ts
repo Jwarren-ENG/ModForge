@@ -27,6 +27,8 @@ export interface DeterministicResult {
   files: GeneratedFile[];
   /** Reasons (one per uncovered feature) suitable for events / logs. */
   uncoveredReasons: string[];
+  /** Free-form notes from generators (e.g. retint fell back to procedural). */
+  noticeMessages: string[];
   /** One-line summary suitable for the codegen phase log. */
   summary: string;
 }
@@ -82,6 +84,7 @@ export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult
       coverage,
       files: [],
       uncoveredReasons,
+      noticeMessages: merged.noticeMessages.slice(),
       summary: `falling back to AI codegen — ${uncoveredReasons.length} uncovered feature(s)`,
     };
   }
@@ -92,6 +95,7 @@ export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult
     coverage,
     files,
     uncoveredReasons: [],
+    noticeMessages: merged.noticeMessages.slice(),
     summary: `templates covered all ${spec.features.length} feature(s)`,
   };
 }
@@ -117,6 +121,7 @@ function generateForFeature(spec: ModSpec, feature: ModFeature): FeatureContribu
 }
 
 function mergeInto(dest: FeatureContribution, src: FeatureContribution): void {
+  dest.noticeMessages.push(...src.noticeMessages);
   dest.imports.push(...src.imports);
   dest.fieldDecls.push(...src.fieldDecls);
   dest.itemRegisters.push(...src.itemRegisters);

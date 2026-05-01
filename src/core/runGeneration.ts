@@ -101,10 +101,14 @@ export async function runGeneration(
     const determ = tryGenerateDeterministically(spec);
     let writtenPaths: string[];
     let codegenSource: "templates" | "ai";
+    let extraLimitations: string[] = [];
     if (determ.fullyCovered) {
       const result = await safeWriteFiles(projectPath, determ.files);
       writtenPaths = result.written;
       codegenSource = "templates";
+      // Surface generator notices (e.g. "fell back to procedural texture")
+      // in the generated README's Limitations section.
+      extraLimitations = determ.noticeMessages.slice();
     } else {
       const code = await generateModCode(spec, projectPath);
       writtenPaths = code.written;
@@ -133,7 +137,7 @@ export async function runGeneration(
     });
 
     if (outcome.success) {
-      await generateReadme(spec, projectPath, outcome.jarPath);
+      await generateReadme(spec, projectPath, outcome.jarPath, extraLimitations);
     }
     const summary = generateProjectSummary(spec, outcome, projectPath);
     onEvent({ type: "done", outcome, summary, projectPath });

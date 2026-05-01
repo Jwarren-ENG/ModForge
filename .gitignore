@@ -1,6 +1,8 @@
 node_modules/
 dist/
 generated-projects/
+debug-textures/
+vanilla-assets*/
 .env
 .env.local
 *.log

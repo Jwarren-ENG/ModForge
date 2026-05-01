@@ -1,5 +1,8 @@
+import type { Buffer } from "node:buffer";
 import type { ModSpec, RetextureBlockFeatureT } from "../schemas.js";
 import { generateTexturePng } from "../textures/index.js";
+import { retintPng } from "../textures/retint.js";
+import { readVanillaSource } from "../textures/vanillaSource.js";
 import { VANILLA_BLOCK_TARGETS, type Face } from "../textures/vanillaTargets.js";
 import { emptyContribution, type FeatureContribution } from "./types.js";
 
@@ -56,15 +59,51 @@ export function generateRetextureBlock(
     }
     c.resources.push({
       path: `src/main/resources/${texPath}`,
-      content: generateTexturePng({
-        primaryColorHex: feature.details.textureColor,
-        secondaryColorHex: feature.details.secondaryColor,
-        style: feature.details.textureStyle,
-        glowing: feature.details.glowing ?? false,
-        faceMode: face,
-        salt: salt++,
-      }),
+      content: makeBlockPng(feature, texPath, face, salt++, c),
     });
   }
   return c;
+}
+
+function makeBlockPng(
+  feature: RetextureBlockFeatureT,
+  texturePath: string,
+  face: Face,
+  salt: number,
+  c: FeatureContribution,
+): Buffer {
+  // Vanilla-asset retint first — preserves Mojang's per-face shape/detail
+  // (e.g. grass_block_top vs grass_block_side will keep their distinct
+  // structure, just recolored).
+  const src = readVanillaSource(texturePath);
+  // Ore blocks: keep the stone background mostly intact, only recolor the
+  // chroma-rich flecks. Detected by the `_ore` suffix on the vanilla target
+  // — the allowlist guarantees the name shape so this is safe to match.
+  const isOre = /_ore$/.test(feature.details.vanillaTarget);
+  if (src) {
+    try {
+      return retintPng(src, {
+        primaryColorHex: feature.details.textureColor,
+        secondaryColorHex: feature.details.secondaryColor,
+        glowing: feature.details.glowing ?? false,
+        oreMode: isOre,
+      });
+    } catch (err) {
+      c.noticeMessages.push(
+        `Could not decode the vanilla source for ${feature.details.vanillaTarget} (${face}): ${(err as Error).message}; used a procedural fallback texture.`,
+      );
+    }
+  } else if (process.env.MODFORGE_VANILLA_ASSETS_DIR) {
+    c.noticeMessages.push(
+      `Original vanilla texture for ${feature.details.vanillaTarget} (${face}) was not found in MODFORGE_VANILLA_ASSETS_DIR; used a procedural fallback texture.`,
+    );
+  }
+  return generateTexturePng({
+    primaryColorHex: feature.details.textureColor,
+    secondaryColorHex: feature.details.secondaryColor,
+    style: feature.details.textureStyle,
+    glowing: feature.details.glowing ?? false,
+    faceMode: face,
+    salt,
+  });
 }

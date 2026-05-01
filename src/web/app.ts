@@ -9,6 +9,8 @@ import type {
   GenerationEvent,
   RunGenerationOptions,
 } from "../core/runGeneration.js";
+import { generateClarification as defaultClarify } from "../agent/clarify.js";
+import type { ClarificationResponse } from "../schemas.js";
 import {
   activeJobCount,
   createJob,
@@ -27,6 +29,7 @@ export type RunGenerationFn = (
 
 export type OpenMode = "folder" | "reveal";
 export type OpenInFinderFn = (filePath: string, mode: OpenMode) => Promise<void>;
+export type ClarifyFn = (idea: string) => Promise<ClarificationResponse>;
 
 export interface AppDeps {
   runGeneration?: RunGenerationFn;
@@ -36,6 +39,8 @@ export interface AppDeps {
   clientDir?: string | null;
   /** Override the system "open in Finder" call (tests). */
   openInFinder?: OpenInFinderFn;
+  /** Override the clarification LLM call (tests). */
+  clarify?: ClarifyFn;
 }
 
 /**
@@ -90,6 +95,7 @@ export function createApp(deps: AppDeps = {}): Express {
       ? null
       : (deps.clientDir ?? path.resolve(__dirname, "client"));
   const openInFinder = deps.openInFinder ?? defaultOpenInFinder;
+  const clarifyFn = deps.clarify ?? defaultClarify;
 
   const app = express();
 
@@ -134,8 +140,38 @@ export function createApp(deps: AppDeps = {}): Express {
         "open",
         "reveal",
         "download",
+        "clarify",
       ],
     });
+  });
+
+  /**
+   * Ask Claude whether the user's idea needs clarification, and if so return
+   * up to 3 short questions with relevant answer choices. Synchronous (one
+   * Claude call); does not consume an active-job slot.
+   *
+   * Body: { idea: string } (≤ 2000 chars).
+   * Response shape: { skip, questions[], summary } per ClarificationResponseSchema.
+   */
+  app.post("/api/clarify", async (req, res) => {
+    const body = req.body ?? {};
+    const ideaRaw = typeof body.idea === "string" ? body.idea : "";
+    const idea = ideaRaw.trim();
+    if (idea.length === 0) {
+      res.status(400).json({ error: "idea is required (non-empty string)" });
+      return;
+    }
+    if (idea.length > 2000) {
+      res.status(400).json({ error: "idea too long (max 2000 chars)" });
+      return;
+    }
+    try {
+      const result = await clarifyFn(idea);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
   });
 
   app.post("/api/generate", (req, res) => {
@@ -349,6 +385,19 @@ export function createApp(deps: AppDeps = {}): Express {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-cache");
     res.send(data);
+  });
+
+  // Tiny favicon — serve a 1x1 transparent PNG so browsers stop logging
+  // /favicon.ico 404s during local dev. No user-visible impact either way.
+  app.get("/favicon.ico", (_req, res) => {
+    // 1x1 transparent PNG bytes (smallest valid).
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+      "base64",
+    );
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(png);
   });
 
   // Anything else under /api/* is a clean JSON 404.
