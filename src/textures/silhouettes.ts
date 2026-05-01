@@ -1,7 +1,17 @@
 /**
- * 16x16 boolean masks used to give item textures a recognizable Minecraft-like
+ * 16x16 region maps used to give item textures a recognizable Minecraft-like
  * pixel-art shape with a transparent background. Block faces still tile, so
  * they don't use these.
+ *
+ * Each silhouette is a `number[][]` where:
+ *   0  = background (transparent)
+ *   1  = body / blade / head    (rendered in the primary palette)
+ *   2  = grip / handle          (rendered in the secondary palette)
+ *   3  = guard / accent ring    (rendered in a bright primary accent)
+ *
+ * Single-region shapes (diamond, crystal-shard, ingot, generic-item) only
+ * use region 1 — the painter still produces the same look as before. The
+ * region split lets weapons read as "blade + handle" instead of one capsule.
  */
 
 export type Silhouette =
@@ -10,34 +20,42 @@ export type Silhouette =
   | "ingot"
   | "generic-item"
   | "sword"
+  | "katana"
+  | "dagger"
   | "pickaxe"
   | "axe"
   | "shovel"
-  | "hoe";
+  | "hoe"
+  | "hammer";
 
 export const SILHOUETTE_SIZE = 16;
 
-/** Inclusive [start, end] column ranges per row. */
-type RowSpec = ReadonlyArray<ReadonlyArray<readonly [number, number]>>;
+export const REGION_BG = 0;
+export const REGION_BODY = 1;
+export const REGION_GRIP = 2;
+export const REGION_GUARD = 3;
 
-function rows(spec: RowSpec): boolean[][] {
-  const mask: boolean[][] = [];
+/** Inclusive [start, end, region?] column ranges per row (region defaults to 1). */
+type Span = readonly [number, number] | readonly [number, number, number];
+type RowSpec = ReadonlyArray<ReadonlyArray<Span>>;
+
+function rows(spec: RowSpec): number[][] {
+  const mask: number[][] = [];
   for (let y = 0; y < SILHOUETTE_SIZE; y++) {
-    const row = new Array<boolean>(SILHOUETTE_SIZE).fill(false);
-    for (const [s, e] of spec[y] ?? []) {
-      for (let x = s; x <= e; x++) row[x] = true;
+    const row = new Array<number>(SILHOUETTE_SIZE).fill(REGION_BG);
+    for (const span of spec[y] ?? []) {
+      const [s, e, region] = span;
+      const r = region ?? REGION_BODY;
+      for (let x = s; x <= e; x++) row[x] = r;
     }
     mask.push(row);
   }
   return mask;
 }
 
-/**
- * Vertical diamond / gem silhouette. Tip at row 1, base at row 14, max width
- * at rows 7-8. Mimics the vanilla diamond/emerald shape closely enough that a
- * recolored version reads as a gem at inventory size.
- */
-function diamondMask(): boolean[][] {
+// ---- Single-region shapes (legacy, all REGION_BODY) ----
+
+function diamondMask(): number[][] {
   return rows([
     [],
     [[7, 8]],
@@ -58,10 +76,7 @@ function diamondMask(): boolean[][] {
   ]);
 }
 
-/**
- * Tall vertical crystal shard with a sharp top tip and a flat-ish base.
- */
-function crystalShardMask(): boolean[][] {
+function crystalShardMask(): number[][] {
   return rows([
     [],
     [[7, 8]],
@@ -82,8 +97,7 @@ function crystalShardMask(): boolean[][] {
   ]);
 }
 
-/** Horizontal rounded ingot. */
-function ingotMask(): boolean[][] {
+function ingotMask(): number[][] {
   return rows([
     [], [], [], [], [],
     [[3, 12]],
@@ -96,8 +110,7 @@ function ingotMask(): boolean[][] {
   ]);
 }
 
-/** Rounded square fallback for items that don't fit the other categories. */
-function genericItemMask(): boolean[][] {
+function genericItemMask(): number[][] {
   return rows([
     [],
     [[3, 12]],
@@ -118,137 +131,220 @@ function genericItemMask(): boolean[][] {
   ]);
 }
 
+// ---- Multi-region weapon/tool shapes ----
+
 /**
- * Diagonal sword silhouette. Pommel near (1, 14), blade tip at (14, 1). The
- * pixel-art width is 1 px along the blade with a guard cross around row 12-13.
+ * Sword: 2-px-wide diagonal blade from upper-right tip to mid-canvas, a
+ * cross-guard row that visibly extends past the blade, then a 2-px grip
+ * with a small pommel. The guard region breaks the "capsule" look that a
+ * single-region thick diagonal produces.
  */
-function swordMask(): boolean[][] {
+function swordMask(): number[][] {
   return rows([
-    /* y=0 */ [],
-    /* y=1 */ [[13, 14]],
-    /* y=2 */ [[12, 14]],
-    /* y=3 */ [[11, 13]],
-    /* y=4 */ [[10, 12]],
-    /* y=5 */ [[9, 11]],
-    /* y=6 */ [[8, 10]],
-    /* y=7 */ [[7, 9]],
-    /* y=8 */ [[6, 8]],
-    /* y=9 */ [[5, 7]],
-    /* y=10 */ [[4, 6]],
-    /* y=11 */ [[3, 5]],
-    /* y=12 */ [[2, 7]], // guard
-    /* y=13 */ [[1, 4]], // hilt
-    /* y=14 */ [[2, 3]],
-    /* y=15 */ [],
+    [],
+    [[13, 14, REGION_BODY]],
+    [[12, 13, REGION_BODY]],
+    [[11, 12, REGION_BODY]],
+    [[10, 11, REGION_BODY]],
+    [[9, 10, REGION_BODY]],
+    [[8, 9, REGION_BODY]],
+    [[7, 8, REGION_BODY]],
+    [[6, 7, REGION_BODY]],
+    [[5, 6, REGION_BODY]],
+    [[4, 5, REGION_BODY]],
+    [[3, 6, REGION_GUARD]],
+    [[3, 4, REGION_GRIP]],
+    [[2, 3, REGION_GRIP]],
+    [[1, 2, REGION_GRIP]],
+    [],
   ]);
 }
 
 /**
- * Pickaxe silhouette: a wide head at the top with a diagonal handle.
+ * Katana: a longer, thinner (1-px) blade angled top-right → mid-canvas,
+ * a small tsuba (guard), and a slim grip running diagonally toward the
+ * lower-left corner.
  */
-function pickaxeMask(): boolean[][] {
+function katanaMask(): number[][] {
   return rows([
-    /* y=0 */ [],
-    /* y=1 */ [[2, 13]],
-    /* y=2 */ [[3, 12]],
-    /* y=3 */ [[6, 9]],
-    /* y=4 */ [[6, 9]],
-    /* y=5 */ [[7, 9]],
-    /* y=6 */ [[6, 8]],
-    /* y=7 */ [[5, 7]],
-    /* y=8 */ [[4, 6]],
-    /* y=9 */ [[3, 5]],
-    /* y=10 */ [[3, 5]],
-    /* y=11 */ [[2, 4]],
-    /* y=12 */ [[2, 4]],
-    /* y=13 */ [[1, 3]],
-    /* y=14 */ [[1, 3]],
-    /* y=15 */ [],
+    [[14, 14, REGION_BODY]],
+    [[13, 14, REGION_BODY]],
+    [[12, 13, REGION_BODY]],
+    [[11, 12, REGION_BODY]],
+    [[10, 11, REGION_BODY]],
+    [[9, 10, REGION_BODY]],
+    [[8, 9, REGION_BODY]],
+    [[7, 8, REGION_BODY]],
+    [[6, 7, REGION_BODY]],
+    [[5, 7, REGION_GUARD]],
+    [[4, 5, REGION_GRIP]],
+    [[3, 4, REGION_GRIP]],
+    [[2, 3, REGION_GRIP]],
+    [[1, 2, REGION_GRIP]],
+    [[1, 1, REGION_GRIP]],
+    [],
   ]);
 }
 
 /**
- * Axe silhouette: head on the upper-right, diagonal handle to lower-left.
+ * Dagger: short blade in the upper-right + small guard + 2-px grip.
  */
-function axeMask(): boolean[][] {
+function daggerMask(): number[][] {
   return rows([
-    /* y=0 */ [],
-    /* y=1 */ [[7, 12]],
-    /* y=2 */ [[6, 13]],
-    /* y=3 */ [[6, 12]],
-    /* y=4 */ [[7, 11]],
-    /* y=5 */ [[7, 9]],
-    /* y=6 */ [[6, 8]],
-    /* y=7 */ [[5, 7]],
-    /* y=8 */ [[4, 6]],
-    /* y=9 */ [[4, 6]],
-    /* y=10 */ [[3, 5]],
-    /* y=11 */ [[3, 5]],
-    /* y=12 */ [[2, 4]],
-    /* y=13 */ [[2, 4]],
-    /* y=14 */ [[1, 3]],
-    /* y=15 */ [],
+    [],
+    [],
+    [[13, 13, REGION_BODY]],
+    [[12, 13, REGION_BODY]],
+    [[11, 12, REGION_BODY]],
+    [[10, 11, REGION_BODY]],
+    [[9, 10, REGION_BODY]],
+    [[8, 9, REGION_BODY]],
+    [[6, 10, REGION_GUARD]],
+    [[6, 7, REGION_GRIP]],
+    [[5, 6, REGION_GRIP]],
+    [[5, 5, REGION_GRIP]],
+    [],
+    [],
+    [],
+    [],
   ]);
 }
 
 /**
- * Shovel silhouette: small head at the top with a long thin handle.
+ * Hammer: a chunky head at the top with a slim, slightly-diagonal grip
+ * running toward the lower-right corner. Region 1 is the head, region 2
+ * is the grip — clearly separated by both shape and color.
  */
-function shovelMask(): boolean[][] {
+function hammerMask(): number[][] {
   return rows([
-    /* y=0 */ [],
-    /* y=1 */ [[10, 13]],
-    /* y=2 */ [[9, 13]],
-    /* y=3 */ [[9, 12]],
-    /* y=4 */ [[8, 11]],
-    /* y=5 */ [[8, 10]],
-    /* y=6 */ [[7, 9]],
-    /* y=7 */ [[6, 8]],
-    /* y=8 */ [[5, 7]],
-    /* y=9 */ [[4, 6]],
-    /* y=10 */ [[3, 5]],
-    /* y=11 */ [[3, 5]],
-    /* y=12 */ [[2, 4]],
-    /* y=13 */ [[2, 4]],
-    /* y=14 */ [[1, 3]],
-    /* y=15 */ [],
+    [],
+    [[3, 11, REGION_BODY]],
+    [[2, 12, REGION_BODY]],
+    [[2, 12, REGION_BODY]],
+    [[3, 11, REGION_BODY]],
+    [[5, 6, REGION_GRIP]],
+    [[5, 6, REGION_GRIP]],
+    [[6, 7, REGION_GRIP]],
+    [[6, 7, REGION_GRIP]],
+    [[7, 8, REGION_GRIP]],
+    [[7, 8, REGION_GRIP]],
+    [[8, 9, REGION_GRIP]],
+    [[8, 9, REGION_GRIP]],
+    [[9, 10, REGION_GRIP]],
+    [[9, 10, REGION_GRIP]],
+    [],
   ]);
 }
 
 /**
- * Hoe silhouette: small angular head with a long handle.
+ * Pickaxe: wide head + spike at the top, diagonal grip to the lower-left.
  */
-function hoeMask(): boolean[][] {
+function pickaxeMask(): number[][] {
   return rows([
-    /* y=0 */ [],
-    /* y=1 */ [[10, 14]],
-    /* y=2 */ [[10, 12]],
-    /* y=3 */ [[9, 11]],
-    /* y=4 */ [[9, 10]],
-    /* y=5 */ [[8, 9]],
-    /* y=6 */ [[7, 8]],
-    /* y=7 */ [[6, 7]],
-    /* y=8 */ [[5, 6]],
-    /* y=9 */ [[4, 5]],
-    /* y=10 */ [[3, 4]],
-    /* y=11 */ [[3, 4]],
-    /* y=12 */ [[2, 3]],
-    /* y=13 */ [[2, 3]],
-    /* y=14 */ [[1, 2]],
-    /* y=15 */ [],
+    [],
+    [[2, 13, REGION_BODY]],
+    [[3, 12, REGION_BODY]],
+    [[6, 9, REGION_BODY]],
+    [[6, 9, REGION_BODY]],
+    [[7, 9, REGION_GRIP]],
+    [[6, 8, REGION_GRIP]],
+    [[5, 7, REGION_GRIP]],
+    [[4, 6, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[1, 3, REGION_GRIP]],
+    [[1, 3, REGION_GRIP]],
+    [],
   ]);
 }
 
-export function getMask(s: Silhouette): boolean[][] {
+/**
+ * Axe: head on the upper-right, diagonal grip toward the lower-left.
+ */
+function axeMask(): number[][] {
+  return rows([
+    [],
+    [[7, 12, REGION_BODY]],
+    [[6, 13, REGION_BODY]],
+    [[6, 12, REGION_BODY]],
+    [[7, 11, REGION_BODY]],
+    [[7, 9, REGION_GRIP]],
+    [[6, 8, REGION_GRIP]],
+    [[5, 7, REGION_GRIP]],
+    [[4, 6, REGION_GRIP]],
+    [[4, 6, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[1, 3, REGION_GRIP]],
+    [],
+  ]);
+}
+
+/**
+ * Shovel: small head at the top with a long thin diagonal handle.
+ */
+function shovelMask(): number[][] {
+  return rows([
+    [],
+    [[10, 13, REGION_BODY]],
+    [[9, 13, REGION_BODY]],
+    [[9, 12, REGION_BODY]],
+    [[8, 11, REGION_BODY]],
+    [[8, 10, REGION_GRIP]],
+    [[7, 9, REGION_GRIP]],
+    [[6, 8, REGION_GRIP]],
+    [[5, 7, REGION_GRIP]],
+    [[4, 6, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[3, 5, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[2, 4, REGION_GRIP]],
+    [[1, 3, REGION_GRIP]],
+    [],
+  ]);
+}
+
+/**
+ * Hoe: small angular head at the top with a long thin diagonal handle.
+ */
+function hoeMask(): number[][] {
+  return rows([
+    [],
+    [[10, 14, REGION_BODY]],
+    [[10, 12, REGION_BODY]],
+    [[9, 11, REGION_BODY]],
+    [[9, 10, REGION_GRIP]],
+    [[8, 9, REGION_GRIP]],
+    [[7, 8, REGION_GRIP]],
+    [[6, 7, REGION_GRIP]],
+    [[5, 6, REGION_GRIP]],
+    [[4, 5, REGION_GRIP]],
+    [[3, 4, REGION_GRIP]],
+    [[3, 4, REGION_GRIP]],
+    [[2, 3, REGION_GRIP]],
+    [[2, 3, REGION_GRIP]],
+    [[1, 2, REGION_GRIP]],
+    [],
+  ]);
+}
+
+export function getMask(s: Silhouette): number[][] {
   switch (s) {
     case "diamond": return diamondMask();
     case "crystal-shard": return crystalShardMask();
     case "ingot": return ingotMask();
     case "sword": return swordMask();
+    case "katana": return katanaMask();
+    case "dagger": return daggerMask();
     case "pickaxe": return pickaxeMask();
     case "axe": return axeMask();
     case "shovel": return shovelMask();
     case "hoe": return hoeMask();
+    case "hammer": return hammerMask();
     case "generic-item":
     default: return genericItemMask();
   }
@@ -273,5 +369,29 @@ export function silhouetteForStyle(style: string): Silhouette {
     case "plain":
     default:
       return "generic-item";
+  }
+}
+
+/**
+ * Map a planner-supplied weaponType to a silhouette. Used by the tool/weapon
+ * generator so a katana request gets a katana shape, a hammer gets a hammer
+ * shape, etc. Unknown values fall back to "sword".
+ */
+export function silhouetteForWeaponType(t: string | undefined): Silhouette {
+  switch (t) {
+    case "katana": return "katana";
+    case "dagger": return "dagger";
+    case "sword": return "sword";
+    case "axe": return "axe";
+    case "pickaxe": return "pickaxe";
+    case "shovel": return "shovel";
+    case "hoe": return "hoe";
+    case "hammer":
+    case "mace":
+    case "club":
+      return "hammer";
+    case "custom-melee":
+    default:
+      return "sword";
   }
 }

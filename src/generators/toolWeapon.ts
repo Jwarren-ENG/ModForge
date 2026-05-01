@@ -1,5 +1,6 @@
 import type { ModSpec, ToolFeatureT, WeaponFeatureT } from "../schemas.js";
 import { generateTexturePng } from "../textures/index.js";
+import { silhouetteForWeaponType } from "../textures/silhouettes.js";
 import { constName, humanize, pascalCase } from "./utils.js";
 import { emptyContribution, type FeatureContribution } from "./types.js";
 
@@ -68,6 +69,7 @@ export function generateToolOrWeapon(
         style: feature.details.textureStyle ?? "metal",
         glowing: feature.details.glowing ?? false,
         faceMode: "item",
+        silhouette: silhouetteForWeaponType(feature.details.weaponType),
       }),
     });
   }

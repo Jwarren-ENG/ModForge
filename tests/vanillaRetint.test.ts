@@ -539,6 +539,44 @@ test("retextureItem: env var set but file missing -> procedural fallback + notic
   }
 });
 
+test("retextureItem: corrupt source PNG -> procedural fallback + decode-failure notice", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "modforge-vanilla-"));
+  try {
+    // Write a file that exists but is not a valid PNG.
+    const target = path.join(tmp, "assets/minecraft/textures/item/wooden_sword.png");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, Buffer.from("not actually a PNG, just bytes"));
+
+    const feature = {
+      type: "retexture_item",
+      id: "red_wooden_sword",
+      name: "Red Wooden Sword",
+      description: "",
+      details: {
+        vanillaTarget: "minecraft:wooden_sword",
+        textureStyle: "metal",
+        textureColor: "#cc1133",
+      },
+    } as const;
+
+    const c = withEnv("MODFORGE_VANILLA_ASSETS_DIR", tmp, () =>
+      generateRetextureItem(baseSpec, feature as never),
+    );
+
+    // Still produces a valid PNG output (via procedural fallback), and
+    // surfaces a notice so the user knows the vanilla source was unusable.
+    assert.equal(c.resources.length, 1);
+    const out = c.resources[0]!.content as Buffer;
+    assert.ok(Buffer.isBuffer(out));
+    const dec = decodePng(out);
+    assert.equal(dec.width, 16);
+    assert.equal(c.noticeMessages.length, 1);
+    assert.match(c.noticeMessages[0]!, /Could not decode the vanilla source/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 // =====================================================================
 // retextureBlock generator — multi-face retint
 // =====================================================================
@@ -584,6 +622,59 @@ test("retextureBlock: grass_block retints both top + side from synthetic sources
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("retextureBlock: corrupt source PNG -> procedural fallback + decode-failure notice", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "modforge-vanilla-"));
+  try {
+    // Write garbage at the diamond_ore source path.
+    const target = path.join(tmp, "assets/minecraft/textures/block/diamond_ore.png");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, Buffer.from("\x89PNG\r\n\x1a\nthen garbage"));
+
+    const feature = {
+      type: "retexture_block",
+      id: "purple_diamond_ore",
+      name: "Purple Diamond Ore",
+      description: "",
+      details: {
+        vanillaTarget: "minecraft:diamond_ore",
+        textureStyle: "stone",
+        textureColor: "#5a008a",
+      },
+    } as const;
+
+    const c = withEnv("MODFORGE_VANILLA_ASSETS_DIR", tmp, () =>
+      generateRetextureBlock(baseSpec, feature as never),
+    );
+
+    assert.equal(c.resources.length, 1);
+    const out = c.resources[0]!.content as Buffer;
+    const dec = decodePng(out);
+    assert.equal(dec.width, 16);
+    assert.equal(c.noticeMessages.length, 1);
+    assert.match(c.noticeMessages[0]!, /Could not decode the vanilla source/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// =====================================================================
+// .gitignore regression — Mojang assets and debug textures stay local
+// =====================================================================
+
+test(".gitignore: contains vanilla-assets*/ and debug-textures/ (Mojang assets must stay local)", async () => {
+  const root = path.resolve(import.meta.dirname ?? ".", "..");
+  const gi = await fs.readFile(path.join(root, ".gitignore"), "utf8");
+  const lines = gi.split(/\r?\n/).map((l) => l.trim());
+  assert.ok(
+    lines.includes("vanilla-assets*/"),
+    `.gitignore must contain 'vanilla-assets*/' so extracted Mojang textures are never committed; got:\n${gi}`,
+  );
+  assert.ok(
+    lines.includes("debug-textures/"),
+    `.gitignore must contain 'debug-textures/' so retint debug PNGs are never committed; got:\n${gi}`,
+  );
 });
 
 // =====================================================================

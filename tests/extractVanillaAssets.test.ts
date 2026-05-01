@@ -14,6 +14,7 @@ import {
   objectStorageRelPath,
   relIndexKeyForAllowlistPath,
   resolveAssetIndexId,
+  validateVanillaTexturePath,
 } from "../scripts/extractVanillaAssets.js";
 
 test("relIndexKeyForAllowlistPath: strips leading 'assets/'", () => {
@@ -205,6 +206,117 @@ test("resolveAssetIndexId: rejects ids with path-unsafe characters (defense in d
         `id "${badId}" must be rejected`,
       );
     }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+// =====================================================================
+// validateVanillaTexturePath — output containment guard
+// =====================================================================
+
+test("validateVanillaTexturePath: accepts allowlisted item + block paths and resolves inside the output root", async () => {
+  const root = await tmpRoot();
+  try {
+    const ok1 = validateVanillaTexturePath(
+      "assets/minecraft/textures/item/wooden_sword.png",
+      root,
+    );
+    assert.ok(ok1.ok, ok1.ok ? "" : ok1.reason);
+    assert.equal(
+      ok1.absolutePath,
+      path.join(root, "assets/minecraft/textures/item/wooden_sword.png"),
+    );
+    const ok2 = validateVanillaTexturePath(
+      "assets/minecraft/textures/block/diamond_ore.png",
+      root,
+    );
+    assert.ok(ok2.ok);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateVanillaTexturePath: rejects '..' segments anywhere in the path", () => {
+  for (const bad of [
+    "../escape.png",
+    "assets/../../escape.png",
+    "assets/minecraft/textures/item/../../../escape.png",
+    "assets/minecraft/textures/item/..",
+    "assets\\..\\escape.png",
+  ]) {
+    const r = validateVanillaTexturePath(bad, "/tmp/out");
+    assert.equal(r.ok, false, `must reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test("validateVanillaTexturePath: rejects absolute paths (POSIX + Windows drive)", () => {
+  for (const bad of [
+    "/etc/passwd",
+    "/Users/foo/x.png",
+    "C:/windows/system32/x.png",
+    "C:\\windows\\x.png",
+    "D:/x.png",
+  ]) {
+    const r = validateVanillaTexturePath(bad, "/tmp/out");
+    assert.equal(r.ok, false, `must reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test("validateVanillaTexturePath: rejects non-PNG extensions", () => {
+  for (const bad of [
+    "assets/minecraft/textures/item/wooden_sword.txt",
+    "assets/minecraft/textures/item/wooden_sword",
+    "assets/minecraft/textures/item/wooden_sword.png.exe",
+  ]) {
+    const r = validateVanillaTexturePath(bad, "/tmp/out");
+    assert.equal(r.ok, false, `must reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test("validateVanillaTexturePath: rejects paths outside the textures/{item,block}/ prefix", () => {
+  for (const bad of [
+    "assets/minecraft/textures/entity/zombie.png",
+    "assets/minecraft/sounds/click.png",
+    "secret/wooden_sword.png",
+    "wooden_sword.png",
+  ]) {
+    const r = validateVanillaTexturePath(bad, "/tmp/out");
+    assert.equal(r.ok, false, `must reject ${JSON.stringify(bad)}`);
+  }
+});
+
+test("validateVanillaTexturePath: rejects empty / non-string input", () => {
+  assert.equal(validateVanillaTexturePath("", "/tmp/out").ok, false);
+  // @ts-expect-error — runtime guard
+  assert.equal(validateVanillaTexturePath(null, "/tmp/out").ok, false);
+  // @ts-expect-error — runtime guard
+  assert.equal(validateVanillaTexturePath(undefined, "/tmp/out").ok, false);
+});
+
+test("extractTexturesFromJar: refuses to write a jar entry whose name contains '..' even if it appears in the wanted set", async () => {
+  const root = await tmpRoot();
+  try {
+    const evilName = "assets/minecraft/textures/item/../../../escape.png";
+    const okName = "assets/minecraft/textures/item/wooden_sword.png";
+    const jarBuf = buildZip([
+      { name: evilName, data: Buffer.from("EVIL") },
+      { name: okName, data: Buffer.from("PNG-bytes") },
+    ]);
+    const jarPath = path.join(root, "1.20.1.jar");
+    await fs.writeFile(jarPath, jarBuf);
+    const outRoot = path.join(root, "out");
+
+    const result = extractTexturesFromJar(jarPath, [evilName, okName], outRoot);
+    assert.ok(!result.extracted.has(evilName), "evil entry must NOT be extracted");
+    assert.ok(result.extracted.has(okName), "safe entry should still extract");
+    assert.ok(
+      result.errors.some((e) => e.path === evilName && /unsafe path/.test(e.reason)),
+      "evil entry must be reported as unsafe",
+    );
+    // Filesystem check: nothing was written outside outRoot.
+    const escaped = path.resolve(outRoot, "..", "..", "..", "escape.png");
+    await assert.rejects(fs.access(escaped));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

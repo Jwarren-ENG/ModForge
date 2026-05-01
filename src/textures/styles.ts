@@ -1,5 +1,13 @@
 import { DIRT, mix, shade, WHITE, type Color } from "./colors.js";
-import { getMask, silhouetteForStyle, type Silhouette } from "./silhouettes.js";
+import {
+  getMask,
+  silhouetteForStyle,
+  REGION_BG,
+  REGION_BODY,
+  REGION_GRIP,
+  REGION_GUARD,
+  type Silhouette,
+} from "./silhouettes.js";
 
 export type TextureStyle =
   | "plain"
@@ -146,51 +154,73 @@ function paintItem(
 ): void {
   const mask = getMask(silhouette);
 
-  const outline = shade(primary, -0.6);   // luminance 0
-  const shadow = shade(primary, -0.3);    // luminance 1 (used if no secondary)
-  const shadowColor = secondary ?? shadow; // shadow ring honors secondary
-  const highlight = shade(primary, 0.45); // luminance 3
+  // Body palette (blade / head). The shadow ring picks up the user's
+  // secondaryColor so it stays meaningful on single-region shapes (diamond,
+  // ingot, generic-item) where there's no separate grip region.
+  const bodyOutline = shade(primary, -0.6);
+  const bodyHighlight = shade(primary, 0.45);
+  const bodyShadow = secondary;
   const bright = shade(primary, 0.65);
 
-  const isInside = (y: number, x: number): boolean =>
-    y >= 0 && y < SIZE && x >= 0 && x < SIZE && (mask[y]?.[x] ?? false);
+  // Grip palette — derived from secondary so the user's secondaryColor is
+  // visible on every region-2 pixel. Falls back to a darker primary.
+  const gripBase = secondary;
+  const gripOutline = shade(gripBase, -0.5);
+  const gripHighlight = shade(gripBase, 0.3);
+  const gripShadow = shade(gripBase, -0.25);
 
+  // Guard palette — bright accent in the primary hue.
+  const guardBase = shade(primary, 0.55);
+  const guardOutline = shade(primary, -0.4);
+
+  const regionAt = (y: number, x: number): number => {
+    if (y < 0 || y >= SIZE || x < 0 || x >= SIZE) return REGION_BG;
+    return mask[y]?.[x] ?? REGION_BG;
+  };
+  const isInside = (y: number, x: number): boolean => regionAt(y, x) !== REGION_BG;
+
+  // Outline: pixel is inside, but at least one 4-neighbor is fully outside
+  // the silhouette (alpha boundary). Internal region seams (blade ↔ grip)
+  // are painted in their own region color, not as outline.
   const isOutlinePixel = (y: number, x: number): boolean => {
     if (!isInside(y, x)) return false;
     return !isInside(y - 1, x) || !isInside(y + 1, x) ||
            !isInside(y, x - 1) || !isInside(y, x + 1);
   };
 
-  // Single pass: classify every silhouette pixel into one of four luminance
-  // bands and stamp the corresponding color. Transparent pixels stay alpha=0.
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
-      if (!mask[y]?.[x]) continue;
+      const region = regionAt(y, x);
+      if (region === REGION_BG) continue;
 
-      // Band 0: dark outline.
-      if (isOutlinePixel(y, x)) {
-        cv.set(x, y, outline);
-        continue;
-      }
-
-      // Interior. Highlight ring = pixel is just inside the upper-or-left
-      // outline. Shadow ring = pixel is just inside the lower-or-right outline.
+      const onOutline = isOutlinePixel(y, x);
+      // Highlight/shadow rings are detected against the silhouette boundary,
+      // not against region seams — same shading idea as before.
       const upperRing = isOutlinePixel(y - 1, x) || isOutlinePixel(y, x - 1);
       const lowerRing = isOutlinePixel(y + 1, x) || isOutlinePixel(y, x + 1);
 
-      if (upperRing) {
-        cv.set(x, y, highlight);            // band 3
-      } else if (lowerRing) {
-        cv.set(x, y, shadowColor);          // band 1 (secondary if provided)
+      let c: Color;
+      if (region === REGION_GRIP) {
+        if (onOutline) c = gripOutline;
+        else if (upperRing) c = gripHighlight;
+        else if (lowerRing) c = gripShadow;
+        else c = gripBase;
+      } else if (region === REGION_GUARD) {
+        if (onOutline) c = guardOutline;
+        else c = guardBase;
       } else {
-        cv.set(x, y, primary);              // band 2: deep interior
+        // REGION_BODY
+        if (onOutline) c = bodyOutline;
+        else if (upperRing) c = bodyHighlight;
+        else if (lowerRing) c = bodyShadow;
+        else c = primary;
       }
+      cv.set(x, y, c);
     }
   }
 
-  // 1-pixel sparkle in the upper-left interior. White for gems/crystals,
-  // a brighter shade of primary for everything else — keeps the readable
-  // Minecraft "tiny highlight pixel" cue without overpowering the silhouette.
+  // 1-pixel sparkle on the body region. White for gems/crystals, a brighter
+  // shade of primary for everything else — Minecraft "tiny highlight pixel".
   addSparkle(cv, mask, style === "gem" || style === "crystal" ? WHITE : bright);
 
   // Glow halo: 1-pixel translucent ring around the silhouette.
@@ -202,7 +232,7 @@ function paintItem(
 
 function addGemFacets(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   _primary: Color,
   highlight: Color,
   secondary: Color,
@@ -225,7 +255,7 @@ function addGemFacets(
 
 function addCrystalShine(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   _primary: Color,
   bright: Color,
   secondary: Color,
@@ -243,7 +273,7 @@ function addCrystalShine(
 
 function addMetalBands(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   primary: Color,
   highlight: Color,
   shadow: Color,
@@ -274,7 +304,7 @@ function addMetalBands(
 
 function addStoneSpeckles(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   primary: Color,
   shadow: Color,
   secondary: Color,
@@ -292,7 +322,7 @@ function addStoneSpeckles(
 
 function addGrassBlades(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   primary: Color,
   shadow: Color,
   secondary: Color,
@@ -311,7 +341,7 @@ function addGrassBlades(
 
 function addPlainSheen(
   cv: Canvas,
-  mask: boolean[][],
+  mask: number[][],
   highlight: Color,
   secondary: Color,
 ): void {
@@ -327,7 +357,7 @@ function addPlainSheen(
   }
 }
 
-function addSparkle(cv: Canvas, mask: boolean[][], color: Color): void {
+function addSparkle(cv: Canvas, mask: number[][], color: Color): void {
   // Place a sparkle at an interior top-left position. Walk a small grid until
   // we hit a masked pixel that isn't on the outline.
   for (let y = 2; y < 8; y++) {
@@ -346,7 +376,7 @@ function addSparkle(cv: Canvas, mask: boolean[][], color: Color): void {
   }
 }
 
-function addGlowHalo(cv: Canvas, mask: boolean[][], halo: Color): void {
+function addGlowHalo(cv: Canvas, mask: number[][], halo: Color): void {
   for (let y = 0; y < SIZE; y++) {
     for (let x = 0; x < SIZE; x++) {
       if (mask[y]?.[x]) continue;

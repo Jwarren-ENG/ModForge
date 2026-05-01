@@ -439,9 +439,9 @@ Two new feature types — `retexture_item` and `retexture_block` — produce **r
 
 If the planner emits a `vanillaTarget` outside the allowlist, the spec is rejected at the schema layer **before** any generator runs — no path is ever constructed from raw user input. The generator looks up the allowed path by key and never concatenates user strings into a filesystem path.
 
-**Procedural retint** (Milestone 3.7-patch): item retextures use a luminance-preserving 4-tone retint — outline (darkest), highlight ring (just inside the upper/left silhouette edge), shadow ring (just inside the lower/right edge, honoring `secondaryColor` if provided), and interior (primary). Same shape, four cleanly banded shades, alpha pattern is byte-identical regardless of color. So "make wooden sword red" and "make wooden sword blue" produce the same silhouette with different palettes, not different shapes.
+**Vanilla retint** (Milestone 3.9): when `MODFORGE_VANILLA_ASSETS_DIR` points at an extracted copy of your Minecraft 1.20.1 textures, ModForge decodes the original PNG, recolors it via a continuous, luminance-preserving HSL transform (target hue, saturation blended with the source so neutral pixels stay neutral, source lightness preserved exactly), and re-encodes. Alpha is preserved byte-for-byte. Ore-style block targets (`*_ore`) get an additional chroma-weighted blend so stone background pixels stay stone-grey while the ore flecks recolor — `make diamond ore purple` keeps the cobble-style backdrop. The PNG decoder handles the color types Mojang ships in the 1.20.1 client jar (RGBA, RGB, paletted, grayscale, grayscale+alpha) so paletted textures like `diamond_sword.png` retint correctly.
 
-> **Why we don't read Mojang's PNGs:** ideally a vanilla retexture would read the actual `textures/item/wooden_sword.png` from your Minecraft install and recolor it byte-for-byte. We can't redistribute Mojang's assets, and Node's stdlib has no PNG decoder, so we use procedurally-shaped silhouettes (sword/pickaxe/axe/shovel/hoe/diamond/crystal-shard/ingot/generic-item) that approximate the vanilla shapes. A future milestone may add a `MODFORGE_VANILLA_ASSETS_DIR` opt-in for users who want to point us at their own extracted assets.
+**Procedural fallback**: when `MODFORGE_VANILLA_ASSETS_DIR` is unset, the source PNG is missing, or the decode fails, ModForge falls back to a procedurally-shaped silhouette (sword/pickaxe/axe/shovel/hoe/diamond/crystal-shard/ingot/generic-item) recolored with the spec's palette. The generated README records which textures used the fallback.
 
 **Known limitations** (intentional):
 
@@ -450,11 +450,11 @@ If the planner emits a `vanillaTarget` outside the allowlist, the spec is reject
 
 ### Optional: use real vanilla textures for better retextures
 
-By default, vanilla retextures use **procedurally-shaped** silhouettes — a sword retexture looks like a generic sword, a diamond retexture looks like a generic diamond, etc. If you'd rather have ModForge recolor the **actual** vanilla Minecraft 1.20.1 textures (preserving Mojang's exact pixel art and detail), you can opt in by extracting them from your own local Minecraft install.
+Real vanilla retinting is supported and recommended. When `MODFORGE_VANILLA_ASSETS_DIR` points at an extracted copy of your Minecraft 1.20.1 textures, ModForge recolors Mojang's actual pixel art instead of the procedural fallback. To opt in, extract the textures from your own local Minecraft install:
 
-> Mojang's textures are not redistributed. The extracted folder is gitignored. The extraction script reads from your own local launcher install only.
+> Mojang's textures are not redistributed. The extracted folder is gitignored (`vanilla-assets*/`). The extraction script reads from your own local launcher install only.
 
-**1. Make sure you've launched Minecraft 1.20.1 at least once** (so the launcher has cached the asset index for that version on disk).
+**1. Make sure you've launched Minecraft 1.20.1 at least once** (so the launcher has cached the version jar and asset index for that version on disk).
 
 **2. Run the helper:**
 
@@ -462,19 +462,25 @@ By default, vanilla retextures use **procedurally-shaped** silhouettes — a swo
 npm run vanilla:extract
 ```
 
-This reads:
+This script:
 
-- macOS: `~/Library/Application Support/minecraft/assets/indexes/1.20.1.json`
-- Windows: `%APPDATA%\.minecraft\assets\indexes\1.20.1.json`
-- Linux: `~/.minecraft/assets/indexes/1.20.1.json`
+1. **Reads the version manifest** at `versions/1.20.1/1.20.1.json` to discover the launcher's `assetIndex.id` (modern installs use `"5"`).
+2. **Prefers the client jar** at `versions/1.20.1/1.20.1.jar` (a ZIP) and pulls allowlisted texture entries directly out of it. This is where modern 1.20.1 keeps the block/item PNGs.
+3. **Falls back to the asset index** at `assets/indexes/<assetIndex.id>.json` (and the content-addressed `assets/objects/<2>/<hash>` store) for any allowlisted path the jar doesn't contain.
 
-…iterates ModForge's vanilla retexture allowlist (~145 paths), and copies the matching content-addressed object files into:
+Launcher root by OS:
+
+- macOS: `~/Library/Application Support/minecraft/`
+- Windows: `%APPDATA%\.minecraft\`
+- Linux: `~/.minecraft/`
+
+Allowlisted paths (~174 across items + blocks) land in:
 
 ```
 ./vanilla-assets-1.20.1/assets/minecraft/textures/{item,block}/...
 ```
 
-Anything missing is skipped with a warning — ModForge falls back to the procedural texture for those.
+Every write is guarded by a path-containment check (`validateVanillaTexturePath`) — paths must be relative, free of `..`, end in `.png`, and live under `assets/minecraft/textures/{item,block}/`. The script logs `(N from jar, M from asset index)` and lists anything missing.
 
 **3. Point ModForge at the extracted directory:**
 
@@ -484,9 +490,9 @@ export MODFORGE_VANILLA_ASSETS_DIR="$(pwd)/vanilla-assets-1.20.1"
 
 (Add to `.env` if you want it persistent.)
 
-**4. Re-run** `npm run web` (or the CLI). Now "make wooden sword red" produces a recolored *real* wooden sword rather than the procedural silhouette. The retint preserves alpha exactly, so the silhouette is unchanged — only the four-tone palette shifts.
+**4. Re-run** `npm run web` (or the CLI). Now "make wooden sword red" decodes the real `wooden_sword.png` and applies the luminance-preserving HSL recolor, keeping Mojang's shape, shading, and alpha intact.
 
-If the env var is unset or the file is missing, the procedural fallback runs and the generated `README.md` notes which textures used the fallback.
+If the env var is unset, the source file is missing, or the source PNG can't be decoded (corrupt / unsupported color type), ModForge falls back to procedural texture generation and the generated `README.md` records which textures used the fallback.
 
 ### Repair loop
 

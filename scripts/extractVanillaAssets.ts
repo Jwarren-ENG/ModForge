@@ -91,11 +91,66 @@ export function mcVersionJarPath(
 }
 
 /**
+ * Validate a vanilla-texture relative path and return its absolute path
+ * inside `outputRoot`. Defense in depth — production callers only pass
+ * hardcoded allowlist paths, but this guards against future callers, a
+ * malformed allowlist entry, or a malicious zip entry name from ever
+ * writing outside `outputRoot`.
+ *
+ * Rejects:
+ *   - non-string / empty input
+ *   - absolute paths (POSIX or Windows drive prefix)
+ *   - any segment equal to `..`, including across `/` and `\`
+ *   - paths that don't end in `.png`
+ *   - paths missing the expected `assets/minecraft/textures/(item|block)/` prefix
+ *   - resolved paths that escape `outputRoot` (final containment check)
+ */
+export function validateVanillaTexturePath(
+  rel: string,
+  outputRoot: string,
+): { ok: true; absolutePath: string } | { ok: false; reason: string } {
+  if (typeof rel !== "string" || rel.length === 0) {
+    return { ok: false, reason: "path must be a non-empty string" };
+  }
+  // Reject absolute paths on both POSIX and Windows.
+  if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel)) {
+    return { ok: false, reason: "path must be relative" };
+  }
+  // Normalize separators and reject any `..` segment.
+  const normalized = rel.replace(/\\/g, "/");
+  if (normalized.split("/").some((seg) => seg === "..")) {
+    return { ok: false, reason: "path must not contain '..' segments" };
+  }
+  if (!normalized.toLowerCase().endsWith(".png")) {
+    return { ok: false, reason: "path must end in .png" };
+  }
+  if (
+    !normalized.startsWith("assets/minecraft/textures/item/") &&
+    !normalized.startsWith("assets/minecraft/textures/block/")
+  ) {
+    return {
+      ok: false,
+      reason: "path must be under assets/minecraft/textures/{item,block}/",
+    };
+  }
+  // Final containment: the resolved absolute path must live inside outputRoot.
+  const absRoot = path.resolve(outputRoot);
+  const absTarget = path.resolve(absRoot, normalized);
+  const rootWithSep = absRoot.endsWith(path.sep) ? absRoot : absRoot + path.sep;
+  if (absTarget !== absRoot && !absTarget.startsWith(rootWithSep)) {
+    return { ok: false, reason: "resolved path escapes output root" };
+  }
+  return { ok: true, absolutePath: absTarget };
+}
+
+/**
  * Extract allowlisted texture PNGs out of a Minecraft client jar.
  *
  * Only entries whose name exactly matches one of `wantedPaths` are written.
- * Returns the set of allowlist paths that were successfully extracted, so the
- * caller can fall back to the asset index for the rest.
+ * Even then, every entry name is re-validated by `validateVanillaTexturePath`
+ * before write, so a malicious or malformed allowlist can't escape the
+ * output root. Returns the set of allowlist paths that were successfully
+ * extracted, so the caller can fall back to the asset index for the rest.
  */
 export function extractTexturesFromJar(
   jarPath: string,
@@ -109,11 +164,15 @@ export function extractTexturesFromJar(
   const entries = readZipCentralDirectory(buf);
   for (const entry of entries) {
     if (!wanted.has(entry.name)) continue;
+    const guard = validateVanillaTexturePath(entry.name, outputRoot);
+    if (!guard.ok) {
+      errors.push({ path: entry.name, reason: `unsafe path: ${guard.reason}` });
+      continue;
+    }
     try {
       const data = readZipEntry(buf, entry);
-      const outPath = path.join(outputRoot, entry.name);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, data);
+      fs.mkdirSync(path.dirname(guard.absolutePath), { recursive: true });
+      fs.writeFileSync(guard.absolutePath, data);
       extracted.add(entry.name);
     } catch (e) {
       errors.push({ path: entry.name, reason: (e as Error).message });
@@ -305,9 +364,14 @@ export async function run(): Promise<RunResult> {
           missing++;
           continue;
         }
-        const outPath = path.join(outputRoot, wantedPath);
-        fs.mkdirSync(path.dirname(outPath), { recursive: true });
-        fs.copyFileSync(objPath, outPath);
+        const guard = validateVanillaTexturePath(wantedPath, outputRoot);
+        if (!guard.ok) {
+          console.warn(`skip (unsafe path: ${guard.reason}): ${wantedPath}`);
+          missing++;
+          continue;
+        }
+        fs.mkdirSync(path.dirname(guard.absolutePath), { recursive: true });
+        fs.copyFileSync(objPath, guard.absolutePath);
         fromIndex++;
       }
     }

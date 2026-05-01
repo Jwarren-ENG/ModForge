@@ -103,7 +103,19 @@ const ToolWeaponDetails = z
   .object({
     displayName: z.string().optional(),
     weaponType: z
-      .enum(["hammer", "mace", "club", "sword", "custom-melee"])
+      .enum([
+        "sword",
+        "katana",
+        "dagger",
+        "axe",
+        "pickaxe",
+        "shovel",
+        "hoe",
+        "hammer",
+        "mace",
+        "club",
+        "custom-melee",
+      ])
       .optional(),
     knockback: z.number().min(0).max(10).optional(),
     attackDamage: z.number().min(0).max(20).optional(),

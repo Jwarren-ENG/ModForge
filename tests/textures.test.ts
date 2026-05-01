@@ -430,7 +430,7 @@ test("PNG: every chunk's stored CRC matches a freshly-computed CRC32 over (type+
 
 // ---------- Silhouette mask invariants (P4) ----------
 
-test("silhouette: every silhouette is exactly 16x16 of booleans (P4)", async () => {
+test("silhouette: every silhouette is exactly 16x16 of region ids (P4)", async () => {
   const { getMask } = await import("../src/textures/silhouettes.js");
   for (const s of ["diamond", "crystal-shard", "ingot", "generic-item"] as const) {
     const m = getMask(s);
@@ -438,7 +438,9 @@ test("silhouette: every silhouette is exactly 16x16 of booleans (P4)", async () 
     for (let y = 0; y < 16; y++) {
       assert.equal(m[y]!.length, 16, `${s}: row ${y} must have 16 columns`);
       for (let x = 0; x < 16; x++) {
-        assert.equal(typeof m[y]![x], "boolean", `${s}: (${x},${y}) must be boolean`);
+        const v = m[y]![x];
+        assert.equal(typeof v, "number", `${s}: (${x},${y}) must be a number region id`);
+        assert.ok(v === 0 || v === 1 || v === 2 || v === 3, `${s}: region id at (${x},${y}) must be 0..3, got ${v}`);
       }
     }
   }
@@ -448,12 +450,12 @@ test("silhouette: every silhouette is non-empty and not a full 16x16 rectangle (
   const { getMask } = await import("../src/textures/silhouettes.js");
   for (const s of ["diamond", "crystal-shard", "ingot", "generic-item"] as const) {
     const m = getMask(s);
-    let trues = 0;
-    let falses = 0;
-    for (const row of m) for (const v of row) v ? trues++ : falses++;
-    assert.ok(trues > 0, `${s}: must contain at least one filled pixel`);
-    assert.ok(falses > 0, `${s}: must contain at least one transparent pixel`);
-    assert.notEqual(trues, 256, `${s}: must not fill the entire 16x16`);
+    let filled = 0;
+    let empty = 0;
+    for (const row of m) for (const v of row) (v !== 0 ? filled++ : empty++);
+    assert.ok(filled > 0, `${s}: must contain at least one filled pixel`);
+    assert.ok(empty > 0, `${s}: must contain at least one transparent pixel`);
+    assert.notEqual(filled, 256, `${s}: must not fill the entire 16x16`);
   }
 });
 
@@ -462,7 +464,7 @@ test("silhouette: diamond and crystal-shard have all four corners transparent (P
   for (const s of ["diamond", "crystal-shard"] as const) {
     const m = getMask(s);
     for (const [x, y] of [[0, 0], [15, 0], [0, 15], [15, 15]] as const) {
-      assert.equal(m[y]![x], false, `${s}: corner (${x},${y}) must be false`);
+      assert.equal(m[y]![x], 0, `${s}: corner (${x},${y}) must be background (region 0)`);
     }
   }
 });
@@ -472,19 +474,223 @@ test("silhouette: ingot has empty top and bottom rows (P4)", async () => {
   const m = getMask("ingot");
   for (let y = 0; y <= 4; y++) {
     for (let x = 0; x < 16; x++) {
-      assert.equal(m[y]![x], false, `ingot row ${y} col ${x} must be false`);
+      assert.equal(m[y]![x], 0, `ingot row ${y} col ${x} must be background`);
     }
   }
   for (let y = 11; y < 16; y++) {
     for (let x = 0; x < 16; x++) {
-      assert.equal(m[y]![x], false, `ingot row ${y} col ${x} must be false`);
+      assert.equal(m[y]![x], 0, `ingot row ${y} col ${x} must be background`);
     }
   }
   // Mid rows (5..10) have content.
   for (let y = 5; y <= 10; y++) {
     let trueCount = 0;
-    for (let x = 0; x < 16; x++) if (m[y]![x]) trueCount++;
+    for (let x = 0; x < 16; x++) if (m[y]![x] !== 0) trueCount++;
     assert.ok(trueCount > 0, `ingot mid row ${y} must contain content`);
+  }
+});
+
+// ---------- Milestone 4.0: weapon/tool silhouettes ----------
+
+test("silhouette: katana has a thin diagonal blade region in the upper-right", async () => {
+  const { getMask } = await import("../src/textures/silhouettes.js");
+  const m = getMask("katana");
+  // Blade pixels (region 1) must exist along the upper-right diagonal.
+  let bladeUpperRight = 0;
+  for (let y = 0; y <= 7; y++) {
+    for (let x = 8; x <= 15; x++) {
+      if (m[y]![x] === 1) bladeUpperRight++;
+    }
+  }
+  assert.ok(bladeUpperRight >= 8, `katana blade must occupy upper-right diagonal, got ${bladeUpperRight} pixels`);
+  // Blade is thin: total blade pixels small relative to a thick capsule.
+  let blade = 0;
+  for (const row of m) for (const v of row) if (v === 1) blade++;
+  assert.ok(blade <= 22, `katana blade must be slim (<=22 px), got ${blade}`);
+  // Has a distinct grip region in the lower-left half.
+  let gripLowerLeft = 0;
+  for (let y = 8; y < 16; y++) {
+    for (let x = 0; x <= 7; x++) {
+      if (m[y]![x] === 2) gripLowerLeft++;
+    }
+  }
+  assert.ok(gripLowerLeft >= 4, `katana must have a visible grip in lower-left, got ${gripLowerLeft}`);
+});
+
+test("silhouette: sword is not a capsule — blade, guard, and grip are distinct regions", async () => {
+  const { getMask } = await import("../src/textures/silhouettes.js");
+  const m = getMask("sword");
+  let blade = 0, grip = 0, guard = 0;
+  for (const row of m) for (const v of row) {
+    if (v === 1) blade++;
+    else if (v === 2) grip++;
+    else if (v === 3) guard++;
+  }
+  assert.ok(blade > 0, "sword must have a blade region");
+  assert.ok(grip > 0, "sword must have a distinct grip region");
+  assert.ok(guard > 0, "sword must have a distinct guard region");
+  // Capsule check: sword must not fill more than ~30% of the canvas.
+  const total = blade + grip + guard;
+  assert.ok(total < 80, `sword fills ${total}/256 — too dense, looks like a capsule`);
+});
+
+test("silhouette: hammer has a chunky head and a slim grip in different rows", async () => {
+  const { getMask } = await import("../src/textures/silhouettes.js");
+  const m = getMask("hammer");
+  // Head (region 1) lives in the top rows.
+  let headTop = 0;
+  for (let y = 0; y <= 4; y++) {
+    for (let x = 0; x < 16; x++) if (m[y]![x] === 1) headTop++;
+  }
+  assert.ok(headTop >= 20, `hammer head must be chunky (>=20 px in top rows), got ${headTop}`);
+  // Grip (region 2) lives below.
+  let gripBelow = 0;
+  for (let y = 5; y < 16; y++) {
+    for (let x = 0; x < 16; x++) if (m[y]![x] === 2) gripBelow++;
+  }
+  assert.ok(gripBelow >= 10, `hammer must have a visible grip below the head, got ${gripBelow}`);
+  // No grip pixels in the head rows (row separation).
+  for (let y = 0; y <= 4; y++) {
+    for (let x = 0; x < 16; x++) {
+      assert.notEqual(m[y]![x], 2, `hammer head row ${y} should not contain grip pixels`);
+    }
+  }
+});
+
+test("silhouette: axe has distinct head and grip regions", async () => {
+  const { getMask } = await import("../src/textures/silhouettes.js");
+  const m = getMask("axe");
+  let head = 0, grip = 0;
+  for (const row of m) for (const v of row) {
+    if (v === 1) head++;
+    else if (v === 2) grip++;
+  }
+  assert.ok(head > 0, "axe must have a head region");
+  assert.ok(grip > 0, "axe must have a grip region");
+});
+
+test("silhouetteForWeaponType: maps katana/hammer/axe/etc. correctly", async () => {
+  const { silhouetteForWeaponType } = await import("../src/textures/silhouettes.js");
+  assert.equal(silhouetteForWeaponType("katana"), "katana");
+  assert.equal(silhouetteForWeaponType("dagger"), "dagger");
+  assert.equal(silhouetteForWeaponType("sword"), "sword");
+  assert.equal(silhouetteForWeaponType("hammer"), "hammer");
+  assert.equal(silhouetteForWeaponType("mace"), "hammer");
+  assert.equal(silhouetteForWeaponType("club"), "hammer");
+  assert.equal(silhouetteForWeaponType("axe"), "axe");
+  assert.equal(silhouetteForWeaponType("pickaxe"), "pickaxe");
+  assert.equal(silhouetteForWeaponType("shovel"), "shovel");
+  assert.equal(silhouetteForWeaponType("hoe"), "hoe");
+  assert.equal(silhouetteForWeaponType("custom-melee"), "sword");
+  assert.equal(silhouetteForWeaponType(undefined), "sword");
+  assert.equal(silhouetteForWeaponType("nonsense"), "sword");
+});
+
+test("painter: katana texture has thin diagonal blade pixels and grip pixels (visual smoke check)", () => {
+  const out = paint("metal", {
+    primary: parseHex("#c8c8c8"),
+    secondary: parseHex("#5b3a1f"),
+    faceMode: "item",
+    silhouette: "katana",
+  });
+  // Count opaque pixels — must be > 0 and well under a full block fill.
+  let opaque = 0;
+  for (let i = 3; i < out.length; i += 4) if (out[i] === 255) opaque++;
+  assert.ok(opaque > 20 && opaque < 90, `katana opaque pixel count ${opaque} should be slim, not blocky`);
+  // The grip uses secondary (#5b3a1f, a reddish brown). Expect opaque pixels
+  // matching a wood-tone signature: R > G > B. With a grey primary, only the
+  // grip / shadow region should produce these — the blade body pixels are
+  // greyscale (R = G = B) and won't qualify.
+  let woodyPixels = 0;
+  for (let i = 0; i < out.length; i += 4) {
+    if (out[i + 3] !== 255) continue;
+    if (out[i]! > out[i + 1]! && out[i + 1]! >= out[i + 2]! && out[i]! > out[i + 2]!) woodyPixels++;
+  }
+  assert.ok(woodyPixels > 0, "katana grip should render reddish-brown when secondary is wood-tone");
+});
+
+test("painter: weapon textures are deterministic (same inputs -> identical bytes)", () => {
+  for (const sil of ["sword", "katana", "dagger", "hammer", "axe", "pickaxe"] as const) {
+    const a = paint("metal", {
+      primary: parseHex("#888888"),
+      secondary: parseHex("#5b3a1f"),
+      faceMode: "item",
+      silhouette: sil,
+    });
+    const b = paint("metal", {
+      primary: parseHex("#888888"),
+      secondary: parseHex("#5b3a1f"),
+      faceMode: "item",
+      silhouette: sil,
+    });
+    assert.deepEqual(a, b, `${sil}: same inputs must produce identical bytes`);
+  }
+});
+
+test("painter: changing secondaryColor changes katana grip pixels", () => {
+  const a = paint("metal", {
+    primary: parseHex("#888888"),
+    secondary: parseHex("#5b3a1f"),
+    faceMode: "item",
+    silhouette: "katana",
+  });
+  const b = paint("metal", {
+    primary: parseHex("#888888"),
+    secondary: parseHex("#0a3d62"),
+    faceMode: "item",
+    silhouette: "katana",
+  });
+  assert.notDeepEqual(a, b, "different secondary must change katana bytes");
+});
+
+test("toolWeapon generator: a katana weapon renders the katana silhouette texture", async () => {
+  const { generateToolOrWeapon } = await import("../src/generators/toolWeapon.js");
+  const baseSpec = {
+    modId: "demo",
+    modName: "Demo",
+    modVersion: "1.0.0",
+    mcVersion: "1.20.1",
+    modLoader: "fabric",
+    packageName: "com.modforge.demo",
+    mainClass: "DemoMod",
+    description: "",
+    features: [],
+    filesToCreate: [],
+    limitations: [],
+    assumptions: [],
+  } as never;
+  const feature = {
+    type: "weapon",
+    id: "obsidian_katana",
+    name: "Obsidian Katana",
+    description: "",
+    details: {
+      weaponType: "katana",
+      attackDamage: 7,
+      durability: 800,
+      textureStyle: "metal",
+      textureColor: "#1a1a26",
+      secondaryColor: "#5b3a1f",
+    },
+  } as never;
+  const c = generateToolOrWeapon(baseSpec, feature);
+  const png = c.resources.find((r) => r.path.endsWith(".png"));
+  assert.ok(png, "katana feature must produce a PNG");
+  // Reference the katana silhouette directly and confirm the generated PNG
+  // has the same opaque-pixel footprint as the katana mask.
+  const { getMask } = await import("../src/textures/silhouettes.js");
+  const mask = getMask("katana");
+  const raw = decodePngScanlines(png!.content as Buffer, 16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const a = pixelAlpha(raw, 16, x, y);
+      const expectOpaque = mask[y]![x] !== 0;
+      assert.equal(
+        a > 0,
+        expectOpaque,
+        `katana texture alpha at (${x},${y}): expected opaque=${expectOpaque}, got alpha=${a}`,
+      );
+    }
   }
 });
 

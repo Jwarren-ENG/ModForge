@@ -89,8 +89,10 @@ Feature shapes (details schema per type):
   tool / weapon:
     details: {
       displayName?: string,
-      weaponType?: "hammer"|"mace"|"club"|"sword"|"custom-melee",  // default "hammer"
-      knockback?: 0..10,           // for hammer-type weapons
+      // Pick the closest shape — drives the procedural texture silhouette.
+      // "sword" is the safe default; "custom-melee" if nothing fits.
+      weaponType?: "sword"|"katana"|"dagger"|"axe"|"pickaxe"|"shovel"|"hoe"|"hammer"|"mace"|"club"|"custom-melee",
+      knockback?: 0..10,           // hammer/mace/club tend to want elevated knockback
       attackDamage?: 0..20,
       durability?: integer
     }
@@ -218,7 +220,12 @@ Examples (good):
                  "pattern": ["SSS","SSS","SSS"], "key": { "S": "<modid>:sapphire" } } }
 
   { "type": "weapon", "id": "copper_hammer", "name": "Copper Hammer", "description": "Heavy melee with extra knockback.",
-    "details": { "weaponType": "hammer", "knockback": 1.5, "durability": 250 } }
+    "details": { "weaponType": "hammer", "knockback": 1.5, "durability": 250,
+                 "textureStyle": "metal", "textureColor": "#b87333" } }
+
+  { "type": "weapon", "id": "obsidian_katana", "name": "Obsidian Katana", "description": "Long thin blade.",
+    "details": { "weaponType": "katana", "attackDamage": 7, "durability": 800,
+                 "textureStyle": "metal", "textureColor": "#1a1a26", "secondaryColor": "#5b3a1f" } }
 
   { "type": "command", "id": "give_sapphire_command", "name": "/givesapphire", "description": "Gives the player a sapphire.",
     "details": { "commandName": "givesapphire", "permissionLevel": 2, "action": { "type": "give-item", "itemId": "<modid>:sapphire", "count": 1 } } }
