@@ -1,3 +1,4 @@
+import type { Buffer } from "node:buffer";
 import type { ModSpec, ToolFeatureT, WeaponFeatureT } from "../schemas.js";
 import { generateTexturePng } from "../textures/index.js";
 import { silhouetteForWeaponType } from "../textures/silhouettes.js";
@@ -14,6 +15,7 @@ import { emptyContribution, type FeatureContribution } from "./types.js";
 export function generateToolOrWeapon(
   spec: ModSpec,
   feature: ToolFeatureT | WeaponFeatureT,
+  aiTexture?: Buffer,
 ): FeatureContribution {
   const c = emptyContribution();
   const fieldName = constName(feature.id);
@@ -59,10 +61,15 @@ export function generateToolOrWeapon(
       ) + "\n",
   });
 
-  // Optional procedural PNG (handheld style item icon).
-  if (feature.details.textureColor) {
+  // Texture: prefer AI bytes when the orchestrator pre-fetched them, else
+  // fall back to the deterministic procedural silhouette (only if we have a
+  // color to paint with). The path is hardcoded — AI never names files.
+  const texturePath = `src/main/resources/assets/${spec.modId}/textures/item/${feature.id}.png`;
+  if (aiTexture) {
+    c.resources.push({ path: texturePath, content: aiTexture });
+  } else if (feature.details.textureColor) {
     c.resources.push({
-      path: `src/main/resources/assets/${spec.modId}/textures/item/${feature.id}.png`,
+      path: texturePath,
       content: generateTexturePng({
         primaryColorHex: feature.details.textureColor,
         secondaryColorHex: feature.details.secondaryColor,

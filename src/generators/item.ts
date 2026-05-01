@@ -1,3 +1,4 @@
+import type { Buffer } from "node:buffer";
 import type { ItemFeatureT, ModSpec } from "../schemas.js";
 import { generateTexturePng } from "../textures/index.js";
 import { constName, humanize } from "./utils.js";
@@ -13,6 +14,7 @@ const STD_IMPORTS = [
 export function generateItem(
   spec: ModSpec,
   feature: ItemFeatureT,
+  aiTexture?: Buffer,
 ): FeatureContribution {
   const c = emptyContribution();
   const fieldName = constName(feature.id);
@@ -48,10 +50,15 @@ export function generateItem(
       ) + "\n",
   });
 
-  // Optional procedural PNG.
-  if (feature.details.textureColor) {
+  // Texture: prefer AI bytes when the orchestrator pre-fetched them, else
+  // fall back to the deterministic procedural texture (only if we have a
+  // color to paint with). The path is hardcoded — AI never names files.
+  const texturePath = `src/main/resources/assets/${spec.modId}/textures/item/${feature.id}.png`;
+  if (aiTexture) {
+    c.resources.push({ path: texturePath, content: aiTexture });
+  } else if (feature.details.textureColor) {
     c.resources.push({
-      path: `src/main/resources/assets/${spec.modId}/textures/item/${feature.id}.png`,
+      path: texturePath,
       content: generateTexturePng({
         primaryColorHex: feature.details.textureColor,
         secondaryColorHex: feature.details.secondaryColor,

@@ -1,3 +1,4 @@
+import type { Buffer } from "node:buffer";
 import { assertApiKey, config } from "../config.js";
 import { runPreflight, type PreflightResult } from "../preflight.js";
 import { createModSpec } from "../agent/createModSpec.js";
@@ -8,6 +9,10 @@ import { createProjectWorkspace } from "../workspace/createProjectWorkspace.js";
 import { generateFabricProject } from "../workspace/generateFabricProject.js";
 import { repairLoop, type RepairEvent } from "../build/repairLoop.js";
 import { tryGenerateDeterministically } from "../generators/index.js";
+import {
+  aiTexturesEnabled,
+  precomputeAiTextures,
+} from "../textures/openAiTexture.js";
 import { safeWriteFiles } from "../workspace/safeWrite.js";
 import type { BuildResult, ModSpec, RepairOutcome } from "../types.js";
 
@@ -98,7 +103,21 @@ export async function runGeneration(
     onEvent({ type: "scaffold:done" });
 
     onEvent({ type: "phase", name: "codegen", message: "Generating mod code" });
-    const determ = tryGenerateDeterministically(spec);
+
+    // Optional: pre-fetch AI textures for custom item/weapon/tool features
+    // when both env vars are set. Failures fall back to procedural silently
+    // per feature; a notice surfaces in the generated README.
+    let aiNotices: string[] = [];
+    let aiTextures: ReadonlyMap<string, Buffer> | undefined;
+    if (aiTexturesEnabled()) {
+      const { textures, failures } = await precomputeAiTextures(spec);
+      aiTextures = textures;
+      aiNotices = failures.map(
+        (f) =>
+          `AI texture generation was attempted for ${f.id} but failed: ${f.reason}. Used deterministic fallback.`,
+      );
+    }
+    const determ = tryGenerateDeterministically(spec, { aiTextures, aiNotices });
     let writtenPaths: string[];
     let codegenSource: "templates" | "ai";
     let extraLimitations: string[] = [];

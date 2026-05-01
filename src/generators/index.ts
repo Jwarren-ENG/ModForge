@@ -1,3 +1,4 @@
+import type { Buffer } from "node:buffer";
 import type { GeneratedFile, ModFeature, ModSpec } from "../types.js";
 import { generateBlock } from "./block.js";
 import { generateCommand } from "./command.js";
@@ -48,13 +49,35 @@ const TEMPLATED: ReadonlySet<ModFeature["type"]> = new Set([
   "retexture_block",
 ]);
 
+export interface GeneratorOptions {
+  /**
+   * Pre-computed AI textures keyed by feature.id, populated by
+   * `precomputeAiTextures(spec)` before this entry point runs. Item/weapon/
+   * tool generators look up their feature.id and use the AI bytes if present;
+   * otherwise they fall through to the procedural texture path.
+   *
+   * Never populated for retexture_item / retexture_block — vanilla retextures
+   * always go through the MODFORGE_VANILLA_ASSETS_DIR retint pipeline.
+   */
+  aiTextures?: ReadonlyMap<string, Buffer>;
+  /**
+   * Notice strings produced by the AI precompute step (e.g. "AI texture
+   * unavailable for feature x — used procedural fallback"). Surfaced via
+   * the generated README's Limitations section.
+   */
+  aiNotices?: ReadonlyArray<string>;
+}
+
 /**
  * Never throws on schema-valid input. If a generator unexpectedly throws —
  * or if a feature type has no template — the corresponding feature is marked
  * uncovered and the orchestrator returns `fullyCovered: false`, letting the
  * caller fall back to AI codegen safely.
  */
-export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult {
+export function tryGenerateDeterministically(
+  spec: ModSpec,
+  opts: GeneratorOptions = {},
+): DeterministicResult {
   const coverage: CoverageEntry[] = [];
   const merged = emptyContribution();
   const uncoveredReasons: string[] = [];
@@ -67,7 +90,7 @@ export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult
       continue;
     }
     try {
-      const c = generateForFeature(spec, feature);
+      const c = generateForFeature(spec, feature, opts.aiTextures);
       mergeInto(merged, c);
       coverage.push({ featureId: feature.id, type: feature.type, status: "covered" });
     } catch (err) {
@@ -76,6 +99,10 @@ export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult
       coverage.push({ featureId: feature.id, type: feature.type, status: "uncovered", reason });
       uncoveredReasons.push(reason);
     }
+  }
+
+  if (opts.aiNotices && opts.aiNotices.length > 0) {
+    merged.noticeMessages.push(...opts.aiNotices);
   }
 
   if (uncoveredReasons.length > 0) {
@@ -100,20 +127,27 @@ export function tryGenerateDeterministically(spec: ModSpec): DeterministicResult
   };
 }
 
-function generateForFeature(spec: ModSpec, feature: ModFeature): FeatureContribution {
+function generateForFeature(
+  spec: ModSpec,
+  feature: ModFeature,
+  aiTextures?: ReadonlyMap<string, Buffer>,
+): FeatureContribution {
   switch (feature.type) {
     case "item":
-      return generateItem(spec, feature);
+      return generateItem(spec, feature, aiTextures?.get(feature.id));
     case "block":
       return generateBlock(spec, feature);
     case "tool":
     case "weapon":
-      return generateToolOrWeapon(spec, feature);
+      return generateToolOrWeapon(spec, feature, aiTextures?.get(feature.id));
     case "recipe":
       return generateRecipe(spec, feature);
     case "command":
       return generateCommand(spec, feature);
     case "retexture_item":
+      // Vanilla retextures NEVER use AI — always go through the vanilla
+      // asset retint pipeline (MODFORGE_VANILLA_ASSETS_DIR), regardless of
+      // whether AI textures are enabled.
       return generateRetextureItem(spec, feature);
     case "retexture_block":
       return generateRetextureBlock(spec, feature);
